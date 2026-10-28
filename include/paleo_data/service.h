@@ -29,6 +29,13 @@ struct DataEntry {
     long long count=0;         // 该类别的记录数，例如曲线样点数或本道层段数。
 };
 struct SourceEntry { long long id=0; std::string path, kind, status, message; long long bytes=0; };
+// Complete stored identity for index projections; separate from the original lightweight list contract.
+struct SourceIndexEntry {
+    long long id=0;
+    std::string path, storedPath, kind, status, message;
+    long long bytes=0;
+    std::string sha256;
+};
 struct IssueEntry { long long id=0, sourceId=0; std::string code, message, originalText, sheet, resolution; int row=0; bool blocking=false, resolved=false; };
 // 通用的分页展示表。rows 是本页内容，totalRows 是总行数；表格值统一为文字。
 // 算法计算优先使用下方带 double/vector 字段的专用结果对象。
@@ -230,6 +237,7 @@ public:
     bool saveInterval(long long trackId, IntervalRecord& interval, std::string& error);
     bool deleteData(const std::string& kind, long long id, std::string& error); // DB records only; external files never deleted
     bool listSources(std::vector<SourceEntry>& result, std::string& error) const;
+    bool listSourceIndexEntries(std::vector<SourceIndexEntry>& result, std::string& error) const;
     bool listIssues(bool unresolvedOnly, std::vector<IssueEntry>& result, std::string& error) const;
     bool resolveIssue(long long issueId, const std::string& resolution, std::string& error);
     bool reimportSource(long long sourceId, const ParseOptions& correctedMapping, ImportReport& result, std::string& error, const CancelCheck& cancelled={});

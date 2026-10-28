@@ -1,0 +1,237 @@
+--- a/freexl-2.0.0/src/freexl.c
++++ b/freexl-2.0.0/src/freexl.c
+@@ -1229,6 +1229,7 @@
+     workbook->sector_end = 0;
+     workbook->sector_ready = 0;
+     workbook->ok_bof = -1;
++    workbook->nested_substreams = 0;
+     workbook->biff_version = 0;
+     workbook->biff_max_record_size = 0;
+     workbook->biff_content_type = 0;
+@@ -2938,6 +2939,29 @@
+ 
+     workbook->current_offset += workbook->record_size + 4;
+ 
++    /* A worksheet can contain embedded chart substreams. Their EOF closes
++       the chart, not the enclosing worksheet. Chart cached NUMBER/LABEL
++       records must not overwrite the worksheet's actual cells. */
++    if (workbook->nested_substreams)
++      {
++          if (workbook->record_type == BIFF_BOF)
++            {
++                if (workbook->nested_substreams >= 64)
++                    return FREEXL_CRAFTED_FILE;
++                workbook->nested_substreams++;
++            }
++          else if (workbook->record_type == BIFF_EOF)
++              workbook->nested_substreams--;
++          return FREEXL_OK;
++      }
++    if (workbook->ok_bof == 1 && workbook->record_type == BIFF_BOF)
++      {
++          if (workbook->record_size < 4)
++              return FREEXL_BIFF_INVALID_BOF;
++          workbook->nested_substreams = 1;
++          return FREEXL_OK;
++      }
++
+     if (workbook->record_type == BIFF_CONTINUE)
+       {
+ 	  /* CONTINUE marker found: restoring the previous record type */
+@@ -3020,6 +3044,12 @@
+ 	  workbook->biff_code_page = 0;
+ 	  return FREEXL_OK;
+       }
++
++    /* Standalone chart sheets remain listed, but their drawing/cache records
++       are not worksheet cells. The application registers the original file
++       for diagrams rather than inventing a numeric table from chart caches. */
++    if (workbook->biff_content_type == 0x0020)
++        return FREEXL_OK;
+ 
+     if (workbook->record_type == BIFF_SST)
+       {
+@@ -3894,7 +3924,13 @@
+   record_done:
+     ret = parse_biff_record (workbook, swap);
+     if (ret != FREEXL_OK)
++      {
++#ifdef PALEO_FREEXL_TRACE
++        fprintf (stderr, "FreeXL record=0x%04x size=%u offset=%u error=%d\n", workbook->record_type, workbook->record_size, workbook->current_offset, ret);
++#endif
++        *errcode = ret;
+ 	return 0;
++      }
+     *errcode = FREEXL_OK;
+     return 1;
+ }
+@@ -3934,18 +3970,27 @@
+     workbook->record_size = record_size.value;
+ 
+     if (workbook->record_size >= 8192)
++      {
++        *errcode = FREEXL_CRAFTED_FILE;
+ 	return 0;		/* malformed or crafted file */
++      }
+ 
+     if ((workbook->p_in - workbook->fat->miniStream) + workbook->record_size >
+ 	(int) workbook->size)
++      {
++        *errcode = FREEXL_CFBF_READ_ERROR;
+ 	return 0;		/* unexpected EOF */
++      }
+ 
+     memcpy (workbook->record, workbook->p_in, workbook->record_size);
+     workbook->p_in += record_size.value;
+ 
+     ret = parse_biff_record (workbook, swap);
+     if (ret != FREEXL_OK)
++      {
++        *errcode = ret;
+ 	return 0;
++      }
+     *errcode = FREEXL_OK;
+     return 1;
+ }
+@@ -3954,12 +3999,14 @@
+ parse_dir_entry (void *block, int swap, iconv_t utf16_utf8_converter,
+ 		 unsigned int *workbook, unsigned int *workbook_len,
+ 		 unsigned int *miniFAT_start, unsigned int *miniFAT_len,
+-		 int *rootEntry)
++		 int *rootEntry, int *stream_priority)
+ {
+ /* parsing a Directory entry */
+     char *name;
+     int err;
+     cfbf_dir_entry *entry = (cfbf_dir_entry *) block;
++    *rootEntry = 0;
++    *stream_priority = 0;
+     if (swap)
+       {
+ 	  /* BIG endian arch: swap required */
+@@ -3976,6 +4023,11 @@
+ 	  swap32 (&(entry->size));
+       }
+ 
++    if (entry->type == 0 || entry->name_size.value == 0)
++        return FREEXL_OK;
++    if (entry->name_size.value > 64 || (entry->name_size.value % 2) != 0)
++        return FREEXL_INVALID_CFBF_HEADER;
++
+     name =
+ 	convert_to_utf8 (utf16_utf8_converter, entry->name,
+ 			 entry->name_size.value, &err);
+@@ -3991,10 +4043,12 @@
+     else
+ 	*rootEntry = 0;
+ 
+-    if (strcmp (name, "Workbook") == 0 || strcmp (name, "Book") == 0)
++    if (entry->type == 2 &&
++        (strcmp (name, "Workbook") == 0 || strcmp (name, "Book") == 0))
+       {
+ 	  *workbook = entry->start_sector.value;
+ 	  *workbook_len = entry->size.value;
++          *stream_priority = strcmp (name, "Workbook") == 0 ? 2 : 1;
+       }
+     free (name);
+     return FREEXL_OK;
+@@ -4015,6 +4069,10 @@
+     unsigned int miniFAT_start;
+     unsigned int miniFAT_len;
+     int rootEntry;
++    int stream_priority;
++    int best_priority = 0;
++    unsigned int best_start = 0;
++    unsigned int best_len = 0;
+     int ret;
+ 
+     if (workbook->fat->sector_size == 4096)
+@@ -4033,13 +4091,13 @@
+     workbook_start = 0xFFFFFFFF;
+     for (i_entry = 0; i_entry < max_entries; i_entry++)
+       {
+-	  /* scanning dir entries until Workbook found */
++	  /* Prefer BIFF8 Workbook over the BIFF5 compatibility Book stream. */
+ 	  p_entry = dir_block + (i_entry * 128);
+ 	  ret =
+ 	      parse_dir_entry (p_entry, workbook->fat->swap,
+ 			       workbook->utf16_converter, &workbook_start,
+ 			       &workbook_len, &miniFAT_start, &miniFAT_len,
+-			       &rootEntry);
++			       &rootEntry, &stream_priority);
+ 	  if (ret != FREEXL_OK)
+ 	      return ret;
+ 	  if (rootEntry)
+@@ -4048,14 +4106,19 @@
+ 		workbook->fat->miniFAT_start = miniFAT_start;
+ 		workbook->fat->miniFAT_len = miniFAT_len;
+ 	    }
+-	  if (workbook_start != 0xFFFFFFFF)
+-	    {
+-		/* ok, Workbook found */
+-		workbook->start_sector = workbook_start;
+-		workbook->size = workbook_len;
+-		workbook->current_sector = workbook_start;
+-		return FREEXL_OK;
+-	    }
++	  if (stream_priority > best_priority)
++	    {
++                best_start = workbook_start;
++                best_len = workbook_len;
++                best_priority = stream_priority;
++	    }
++      }
++    if (best_priority)
++      {
++          workbook->start_sector = best_start;
++          workbook->size = best_len;
++          workbook->current_sector = best_start;
++          return FREEXL_OK;
+       }
+     return FREEXL_BIFF_WORKBOOK_NOT_FOUND;
+ }
+@@ -4173,13 +4236,26 @@
+     p_sheet = workbook->first_sheet;
+     while (p_sheet)
+       {
++	  if (p_sheet->type == 0x02)
++	    {
++		/* A standalone chart has no worksheet cell matrix. */
++		p_sheet->rows = 0;
++		p_sheet->columns = 0;
++		p_sheet->valid_dimension = 1;
++		p_sheet->already_done = 1;
++		p_sheet = p_sheet->next;
++		continue;
++	    }
+ 	  if (p_sheet->valid_dimension == 0)
+ 	    {
+ 		/* setting Sheet dimensions */
+ 		int ret;
++		biff_sheet *previous_sheet = workbook->active_sheet;
+ 		p_sheet->rows += 1;
+ 		p_sheet->columns += 1;
++		workbook->active_sheet = p_sheet;
+ 		ret = allocate_cells (workbook);
++		workbook->active_sheet = previous_sheet;
+ 		if (ret != FREEXL_OK)
+ 		  {
+ 		      errcode = ret;
+@@ -4206,6 +4282,7 @@
+ 	  workbook->sector_end = 0;
+ 	  workbook->sector_ready = 0;
+ 	  workbook->ok_bof = -1;
++	  workbook->nested_substreams = 0;
+ 
+ 	  ret = get_workbook_stream (workbook);
+ 	  if (ret != FREEXL_OK)
+--- a/freexl-2.0.0/headers/freexl_internals.h
++++ b/freexl-2.0.0/headers/freexl_internals.h
+@@ -289,6 +289,7 @@
+     unsigned short sector_end;	/* current sector end */
+     int sector_ready;		/* 1=yes; 0=no; */
+     int ok_bof;			/* valid BOF found (BeginOfFile): -1=expected; 1=yes; 0=no; */
++    unsigned int nested_substreams; /* embedded chart BOF/EOF depth; preserve parent worksheet */
+     unsigned short biff_version;	/* BIFF version number */
+     unsigned short biff_max_record_size;	/* 2080 or 8224 depending on version */
+     unsigned short biff_content_type;	/* the type of the current sub-stream */

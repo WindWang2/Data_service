@@ -1,0 +1,5 @@
+ziparchive.h and ziparchive.cpp were copied without changes from the user's
+paleo_workstation-sync-20261027/src/io working tree (integration baseline 71881c2).
+They implement bounded ZIP reading and CRC validation using QtCore and zlib.
+The source provenance is retained here; no separate upstream license file was
+present at that repository root. Distribution terms remain those of the source project.

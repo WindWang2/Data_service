@@ -1,0 +1,226 @@
+#pragma once
+#include "parser.h"
+#include "seismic.h"
+#include <memory>
+#include <cstdint>
+
+namespace paleo::data {
+// 一口井的资料概况。这里只统计当前工区已经入库的资料。
+// curves == 0 不代表这口井没有任何资料，它可能只有时深关系或井位坐标。
+struct WellSummary {
+    long long id=0;             // 数据库中稳定的井编号，不是 vector 的下标。
+    std::string name;           // 井名，例如 SYNTH-1。
+    int logSets=0, curves=0, tracks=0, samples=0;
+    int timeDepthTables=0, trajectorySurveys=0;
+    bool hasCoordinates=false;
+    int corePhotos=0, attachments=0, markerTracks=0;
+};
+// 一条资料的“索引卡片”，用于选择要读取哪条资料，不携带全部采样值。
+// 拿到 id 后，调用 readCurveSlice / readIntervals / readTimeDepth 等读取实际数据。
+struct DataEntry {
+    long long id=0;             // 这条资料的稳定编号；只在对应资料类别内解释。
+    long long wellId=0;         // 所属井；0 可表示工区级资料或尚未归井。
+    long long sourceId=0;       // 来源记录编号，用于追溯原文件。
+    long long parentId=0;       // 曲线时为曲线组编号；层位/剖面时为所属地震体编号。
+    std::string name;          // 资料名称，例如 GR。
+    std::string kind;          // 类别，例如 curves、intervals、time_depth。
+    std::string detail;        // 供界面查看的摘要；业务代码不要通过拆分此字符串取数。
+    long long count=0;         // 该类别的记录数，例如曲线样点数或本道层段数。
+};
+struct SourceEntry { long long id=0; std::string path, kind, status, message; long long bytes=0; };
+struct IssueEntry { long long id=0, sourceId=0; std::string code, message, originalText, sheet, resolution; int row=0; bool blocking=false, resolved=false; };
+// 通用的分页展示表。rows 是本页内容，totalRows 是总行数；表格值统一为文字。
+// 算法计算优先使用下方带 double/vector 字段的专用结果对象。
+struct DataTable {
+    std::vector<std::string> columns;
+    std::vector<std::vector<std::string>> rows;
+    long long totalRows=0;
+};
+
+// 一次曲线读取的真实数值结果，不是文件目录，也不是 JSON 文本。
+// 四个数组等长：下标 i 对应同一个采样位置。结果拥有自己的数组，可直接用于计算。
+struct CurveSlice {
+    long long curveId=0;
+    std::string name;                // 曲线名，例如 GR、SP。
+    std::string unit;                // 曲线单位，空字符串表示尚未确认。
+    std::string depthUnit;           // 深度单位，空字符串表示尚未确认。
+    std::vector<double> depths;      // 请求深度范围内的所有采样深度。
+    std::vector<double> rawValues;   // 原始值；来源中的 -999.25 等空值标记也可能保留在这里。
+    std::vector<double> values;      // 本次选取的值：processed=true 用处理值，false 用原始值。
+    std::vector<unsigned char> quality; // 0正常、1来源空值、2阈值异常、4人工修改。
+    // 计算前检查 std::isfinite(values[i]) 和质量标记。
+    // 特别是读取原始值时，quality=1 的有限哨兵值仍然表示缺失，不能拿来算均值。
+};
+
+struct IntervalRecord {
+    long long id=0;       // 此层段的数据库编号，修改或删除时使用。
+    long long trackId=0;  // 所属分层道编号；同一口井可以有多套不同分层解释。
+    GeologicalInterval value; // 真正的层段数据：名称、顶深、底深、岩性/相等。
+};
+
+struct FeatureColumn {
+    long long curveId=0;
+    std::string name,unit;
+    std::vector<double> values;              // 这条曲线在公共深度轴上的数值。
+    std::vector<unsigned char> quality;
+};
+// 供后续算法使用的多曲线特征表：一个公共深度轴，多列曲线数值。
+// columns[j].values[i] 表示第 j 条曲线在 depths[i] 处的数值。
+struct WellFeatureTable {
+    long long wellId=0;
+    std::string depthUnit;
+    std::vector<double> depths;
+    std::vector<FeatureColumn> columns;
+};
+struct IntervalTrackResult { long long trackId=0,wellId=0; std::string name; DepthInfo depthInfo; std::vector<IntervalRecord> intervals; };
+struct ImportOptions {
+    ParseOptions parsing;
+    bool copySources=true;
+    bool forceNewBatch=false;
+    // 默认重复导入先比较路径、大小、时间和有界内容指纹，未变化则复用已保存结果。
+    // 这不是逐字节完整性审计；设为 true 可每次重算完整 SHA-256（SEG-Y仍用原有快速指纹）。
+    // 首次导入、变化文件和明确重导入始终进行正常校验及解析。
+    bool verifyUnchangedFiles=false;
+    int parserThreads=2; // 目录导入的校验/解析线程数，限制为1–4；1用于串行运行。
+    // 待解析/待发布任务的估计内存预算；不是进程内存硬上限。
+    // >=32MiB的表格等可展开资料单独准备；仅登记的照片/归档文件仍可并行校验。
+    // 入库始终按文件顺序执行。
+    long long maxPendingBytes=256LL*1024*1024;
+};
+struct ImportProgress { int completed=0, total=0; std::string file, status; };
+struct ImportReport {
+    int seen=0, imported=0, registered=0, review=0, failed=0, ignored=0, skipped=0;
+    bool cancelled=false;
+    std::vector<std::string> errors;
+    int cached=0; // skipped 中通过增量检查直接复用的文件数。
+    int workerCount=1;
+    // 多线程时各阶段为逐文件累计耗时，可能大于 elapsedMs（墙钟总耗时）。
+    long long elapsedMs=0, hashMs=0, parseMs=0, copyMs=0, storeMs=0;
+    long long hashedBytes=0; // 实际为完整身份校验读取的字节，不含有界增量检查。
+};
+using ProgressCallback = std::function<void(const ImportProgress&)>;
+struct SectionReadOptions {
+    double firstTime=Missing, lastTime=Missing; // 请求的时间范围；Missing 表示不限制对应端。
+    int maxColumns=1000;                       // 限制沿剖面路径返回的列数。
+    long long maxValues=8000000;               // 限制本次振幅数组大小，避免无界读取。
+};
+struct SeismicSectionResult {
+    int columns=0, samples=0;                  // 剖面列数、每列样点数。
+    double firstTime=Missing, sampleInterval=Missing;
+    std::string timeUnit;
+    std::vector<double> x,y;                   // 每一列实际读取的道位置。
+    std::vector<float> amplitudes;             // 列优先：column * samples + sample。
+    // 时间 = firstTime + sample * sampleInterval。缺道为 NaN，零振幅是有效数据。
+    std::vector<long long> traceIndexes;       // 每列在原文件中的位置；缺道为-1。
+    std::vector<int> inlineNumbers, crosslineNumbers; // 每列实际测线编号。
+};
+struct TimeSliceReadOptions { int maxInlineCount=512, maxCrosslineCount=512; long long maxValues=262144; };
+struct SeismicTimeSliceResult {
+    std::vector<int> inlineNumbers,crosslineNumbers; // 实际测线号，不是数组下标。
+    std::vector<double> x,y;                         // 与振幅数组逐位置对应的坐标。
+    std::vector<float> amplitudes;                   // 行优先：inlineIndex * crosslineNumbers.size() + crosslineIndex。
+    double actualTime=Missing;                       // 实际取到的最近样点时间。
+    std::string timeUnit;
+};
+
+// 对外的 C++ 数据服务入口。调用者无需直接访问 SQLite 或文件解析器。
+// 统一用法：bool 表示调用是否成功；result 引用接收结果；失败时读取 error。
+// 方法返回后，result 的数值已经在内存中，可直接计算/绘图；JSON 序列化是可选的后续步骤。
+// 宿主进程先创建一个 QCoreApplication（Qt GUI 已有 QApplication，无需重复创建）。
+// 每个调用线程各用一个 DataService，不要跨线程共享同一实例。
+// 关闭和重开保留已提交修改；内存分配失败等 C++ 异常仍可能抛出。
+class DataService {
+public:
+    DataService();
+    ~DataService();
+    DataService(const DataService&)=delete;
+    DataService& operator=(const DataService&)=delete;
+    bool createProject(const std::string& directory, const std::string& name, std::string& error);
+    // directory 是包含 data.sqlite 的工区文件夹；路径字符串使用 UTF-8。
+    bool openProject(const std::string& directory, std::string& error);
+    void closeProject();
+    std::string projectPath() const;
+    std::string projectName() const;
+    bool importDirectory(const std::string& directory, const ImportOptions& options, ImportReport& result, std::string& error, const ProgressCallback& progress={}, const CancelCheck& cancelled={});
+    bool importFile(const std::string& path, const ImportOptions& options, ImportReport& result, std::string& error, const CancelCheck& cancelled={});
+    bool listWells(std::vector<WellSummary>& result, std::string& error) const;
+    bool readWellInfo(long long wellId, WellInfo& result, std::string& error) const;
+    bool saveWellInfo(long long wellId, const WellInfo& value, std::string& error);
+    bool createWell(const WellInfo& value, long long& wellId, std::string& error);
+    // 先列出资料卡片，供选择ID。wellId=0 表示不按井过滤，也包含待归井资料。
+    // kind: curves曲线、intervals分层道、samples样品表、time_depth时深、trajectories测斜，
+    // 或 markers、core_photos、attachments、horizons、maps、volumes、sections、tables。
+    bool listData(const std::string& kind, long long wellId, std::vector<DataEntry>& result, std::string& error) const;
+    bool readTable(const std::string& kind, long long id, long long offset, int limit, DataTable& result, std::string& error) const;
+    // 真正读取曲线数组。范围含端点；topDepth/bottomDepth 为 Missing 时不限制相应端。
+    // processed=true 读取处理值，false 读取原值；两种模式都返回 rawValues 与 quality。
+    // ID来自 listData；同名曲线可能属于不同组，调用者需先选定来源/曲线组。
+    bool readCurveSlice(long long curveId, double topDepth, double bottomDepth,
+                        bool processed, CurveSlice& result, std::string& error) const;
+    // 曲线组编号来自 DataEntry.parentId。完整返回共同深度/TVD/TVDSS轴、曲线及来源工作表。
+    bool readLogSet(long long logSetId, bool processed, LogSet& result, std::string& error) const;
+    bool cleanCurve(long long curveId, const CurveCleaningRule& rule, std::string& error);
+    bool saveCurveUnit(long long curveId, const std::string& confirmedUnit, std::string& error); // confirm unknown unit; never relabel existing measurements
+    bool updateCurveValue(long long curveId, long long sampleIndex, double value, std::string& error);
+    bool resetCurve(long long curveId, std::string& error);
+    // 返回与深度范围相交的层段，保留层段原顶底深，不把边界裁成请求值。
+    bool readIntervals(long long trackId, double topDepth, double bottomDepth, std::vector<IntervalRecord>& result, std::string& error) const;
+    bool readIntervalTrackInfo(long long trackId, IntervalTrack& result, std::string& error) const; // metadata only
+    // 将同一口井、同一曲线组共享深度轴的曲线组合为特征表。
+    // 只准备数据，不隐式插值、换单位或执行地质分类模型。
+    bool prepareWellFeatures(long long wellId, const std::vector<long long>& curveIds, double topDepth, double bottomDepth, bool processed, WellFeatureTable& result, std::string& error) const;
+    bool compareIntervals(const std::vector<long long>& trackIds, double topDepth, double bottomDepth, std::vector<IntervalTrackResult>& result, std::string& error) const;
+    bool findMaps(const std::string& area, const std::string& type, const std::string& stratum, std::vector<GeologicalMap>& result, std::string& error) const;
+    bool saveInterval(long long trackId, IntervalRecord& interval, std::string& error);
+    bool deleteData(const std::string& kind, long long id, std::string& error); // DB records only; external files never deleted
+    bool listSources(std::vector<SourceEntry>& result, std::string& error) const;
+    bool listIssues(bool unresolvedOnly, std::vector<IssueEntry>& result, std::string& error) const;
+    bool resolveIssue(long long issueId, const std::string& resolution, std::string& error);
+    bool reimportSource(long long sourceId, const ParseOptions& correctedMapping, ImportReport& result, std::string& error, const CancelCheck& cancelled={});
+    bool sourcePath(long long sourceId, std::string& path, std::string& error) const;
+    bool verifySource(long long sourceId, std::string& error) const; // SEG-Y uses size/mtime/header fingerprint; other sources SHA-256
+    bool readDocument(long long sourceId, std::string& text, std::string& error) const;
+    bool relocateSource(long long sourceId, const std::string& path, std::string& error);
+    bool readSampleTable(long long tableId, SampleTable& result, std::string& error) const;
+    // 返回完整时深点数组及深度/时间约定；保留负时间和未知单位，不自动换算。
+    bool readTimeDepth(long long id, TimeDepthTable& result, std::string& error) const;
+    bool assignTimeDepthWell(long long id, long long wellId, std::string& error); // 0 clears association; points and source remain unchanged
+    bool readTrajectory(long long id, TrajectorySurvey& result, std::string& error) const;
+    // 每个图道返回照片数组，路径已解析为可访问的完整路径；深度未知时为 Missing。
+    bool readCorePhotoTrack(long long id, CorePhotoTrack& result, std::string& error) const;
+    bool readAttachment(long long id, Attachment& result, std::string& error) const;
+    bool readVolume(long long id, SeismicVolume& result, std::string& error) const; // metadata only; traces stays empty
+    bool saveVolume(long long id, const SeismicVolume& value, std::string& error); // edits existing registration; never stores amplitudes
+    bool readHorizon(long long id, long long offset, int limit, SeismicHorizon& result, std::string& error) const;
+    bool saveHorizonInfo(long long id, const SeismicHorizon& value, std::string& error); // name/parent/conventions only
+    bool readMap(long long id, GeologicalMap& result, std::string& error) const;
+    bool saveMap(long long& id, const GeologicalMap& value, std::string& error);
+    bool saveSection(long long& id, const SeismicSection& section, std::string& error);
+    bool readSection(long long id, SeismicSection& result, std::string& error) const;
+    // 快速核验外部SEG-Y。仅返回文件事实，不替用户确认CRS、TWT或时间基准。
+    bool inspectSeismic(long long volumeId, SeismicFileInfo& result, std::string& error, const CancelCheck& cancelled={});
+    // 按文件位置读取单道，既不要求已知CRS，也不要求规则三维网格。
+    bool readSeismicTrace(long long volumeId, long long traceIndex, const SeismicTraceReadOptions& options,
+                          SeismicTraceResult& result, std::string& error, const CancelCheck& cancelled={});
+    // direction为inline或crossline，lineNumber为真实测线号。直接看原生测线无需填写CRS。
+    // 时间窗单位与返回结果一致；超出网格或格式不支持时明确报错，不遍历整个大文件。
+    bool readSeismicLine(long long volumeId, const std::string& direction, int lineNumber, const SectionReadOptions& options,
+                         SeismicSectionResult& result, std::string& error, const CancelCheck& cancelled={});
+    // 原生IL/XL网格切片：时间按文件道头ms解释，不要求已确认CRS/TWT。
+    // 用于文件预览；跨井/层位联合分析仍须确认坐标、时间类型和参考面。
+    bool readSeismicTimeSlice(long long volumeId, double timeMs, const TimeSliceReadOptions& options,
+                             SeismicTimeSliceResult& result, std::string& error, const CancelCheck& cancelled={});
+    bool processSeismicTrace(const SeismicTraceResult& input, const SeismicProcessingOptions& options,
+                            SeismicTraceResult& result, std::string& error, const CancelCheck& cancelled={}) const;
+    bool processSeismicSection(const SeismicSectionResult& input, const SeismicProcessingOptions& options,
+                              SeismicSectionResult& result, std::string& error, const CancelCheck& cancelled={}) const;
+    bool seismicStatistics(const std::vector<float>& amplitudes, SeismicStatistics& result, std::string& error,
+                           const CancelCheck& cancelled={}) const;
+    bool extractSection(long long sectionId, const SectionReadOptions& options, SeismicSectionResult& result, std::string& error, const CancelCheck& cancelled={});
+    bool readTimeSlice(long long volumeId, double time, const TimeSliceReadOptions& options, SeismicTimeSliceResult& result, std::string& error, const CancelCheck& cancelled={});
+    bool backupDatabase(const std::string& destination, std::string& error) const;
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+}

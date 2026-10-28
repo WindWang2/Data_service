@@ -172,6 +172,10 @@ public:
     bool createProject(const std::string& directory, const std::string& name, std::string& error);
     // directory 是包含 data.sqlite 的工区文件夹；路径字符串使用 UTF-8。
     bool openProject(const std::string& directory, std::string& error);
+    // Read existing data only: no schema upgrades, imports or edits. A separate
+    // instance is required for each worker thread, as for writable sessions.
+    bool openProjectReadOnly(const std::string& directory, std::string& error);
+    bool isReadOnly() const;
     void closeProject();
     std::string projectPath() const;
     std::string projectName() const;

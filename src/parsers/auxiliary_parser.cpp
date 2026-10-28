@@ -128,9 +128,9 @@ bool address(const QString& value,int& row,int& col) {
 }
 // XLSX is XML inside ZIP. Reading physical references avoids FreeXL limitations
 // with some OOXML producers and preserves blank but declared worksheet extents.
-bool officeTextEntries(QFile& file,QVector<paleo::io::ZipEntry>& entries,const CancelCheck& cancel,QString& error,bool workbook=false);
-bool extractFileEntry(QFile& file,const paleo::io::ZipEntry& entry,QByteArray& xml,QString& error);
-bool readXlsx(QFile& file,const paleo::io::ZipListResult& list,ParsedFile& out,const CancelCheck& cancel,QString& error) {
+bool officeTextEntries(QFile& file,QVector<paleo::data::zip::ZipEntry>& entries,const CancelCheck& cancel,QString& error,bool workbook=false);
+bool extractFileEntry(QFile& file,const paleo::data::zip::ZipEntry& entry,QByteArray& xml,QString& error);
+bool readXlsx(QFile& file,const paleo::data::zip::ZipListResult& list,ParsedFile& out,const CancelCheck& cancel,QString& error) {
     auto extract=[&](const QString& path,QByteArray& xml)->bool {
         const auto* entry=list.entry(path);
         if(!entry) {error="工作簿缺少条目："+path;return false;}
@@ -243,7 +243,7 @@ bool readWorkbook(const QString& path, ParsedFile& out, const CancelCheck& cance
     QFileInfo info(path);
     if(info.suffix().compare("xlsx",Qt::CaseInsensitive)==0) {
         QFile file(path);if(!file.open(QIODevice::ReadOnly)) {error=file.errorString();return false;}
-        paleo::io::ZipListResult list;
+        paleo::data::zip::ZipListResult list;
         if(!officeTextEntries(file,list.entries,cancel,error,true))return false;
         return readXlsx(file,list,out,cancel,error);
     }
@@ -655,7 +655,7 @@ int mapSamples(ParsedFile& out,const ParseOptions& options,const CancelCheck& ca
 // Rock-core reports can contain hundreds of MiB of photographs. Read only the
 // ZIP directory and selected text entries: image/video payloads stay on disk.
 // Reuse the shared decompressor and CRC checks for each bounded entry.
-bool officeTextEntries(QFile& file,QVector<paleo::io::ZipEntry>& entries,const CancelCheck& cancel,QString& error,bool workbook) {
+bool officeTextEntries(QFile& file,QVector<paleo::data::zip::ZipEntry>& entries,const CancelCheck& cancel,QString& error,bool workbook) {
     const auto fail=[&](const QString& message) {error=message;return false;};
     const auto u16=[](const QByteArray& b,int p) {return qFromLittleEndian<quint16>(reinterpret_cast<const uchar*>(b.constData()+p));};
     const auto u32=[](const QByteArray& b,int p) {return qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(b.constData()+p));};
@@ -691,7 +691,7 @@ bool officeTextEntries(QFile& file,QVector<paleo::io::ZipEntry>& entries,const C
         const int nameLength=u16(directory,offset+28),extraLength=u16(directory,offset+30),commentLength=u16(directory,offset+32);
         const int length=46+nameLength+extraLength+commentLength;
         if(length>directory.size()-offset) return fail("文档目录条目被截断");
-        paleo::io::ZipEntry entry;
+        paleo::data::zip::ZipEntry entry;
         entry.name=QString::fromUtf8(directory.constData()+offset+46,nameLength);
         entry.method=u16(directory,offset+10);entry.crc32=u32(directory,offset+16);
         entry.compressedSize=u32(directory,offset+20);entry.uncompressedSize=u32(directory,offset+24);entry.localHeaderOffset=u32(directory,offset+42);
@@ -731,7 +731,7 @@ bool officeTextEntries(QFile& file,QVector<paleo::io::ZipEntry>& entries,const C
     return true;
 }
 
-bool extractFileEntry(QFile& file,const paleo::io::ZipEntry& entry,QByteArray& xml,QString& error) {
+bool extractFileEntry(QFile& file,const paleo::data::zip::ZipEntry& entry,QByteArray& xml,QString& error) {
     if(!file.seek(qint64(entry.localHeaderOffset))) {error="无法定位 ZIP 条目";return false;}
     QByteArray local=file.read(30);
     if(local.size()!=30||qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(local.constData()))!=0x04034b50u) {error="ZIP 条目本地头无效";return false;}
@@ -742,13 +742,13 @@ bool extractFileEntry(QFile& file,const paleo::io::ZipEntry& entry,QByteArray& x
     if(local.size()!=30+remaining) {error="ZIP 条目被截断";return false;}
     if(QString::fromUtf8(local.constData()+30,nameLength)!=entry.name) {error="ZIP 条目名称与目录不符";return false;}
     auto boundedEntry=entry;boundedEntry.localHeaderOffset=0;
-    return paleo::io::zipExtractEntry(local,boundedEntry,&xml,&error);
+    return paleo::data::zip::zipExtractEntry(local,boundedEntry,&xml,&error);
 }
 
 bool readOfficeText(const QString& path,ParsedFile& out,const CancelCheck& cancel,QString& error) {
     QFile file(path);
     if(!file.open(QIODevice::ReadOnly)) {error="无法打开文档："+file.errorString();return false;}
-    QVector<paleo::io::ZipEntry> entries;
+    QVector<paleo::data::zip::ZipEntry> entries;
     if(!officeTextEntries(file,entries,cancel,error)) return false;
     QString text;
     bool found=false;

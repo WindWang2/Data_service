@@ -33,7 +33,7 @@ bool ProjectStore::exec(const QString& sql,const QVariantList& args,std::string&
 bool ProjectStore::begin(std::string& e){return exec("BEGIN IMMEDIATE",{},e);}
 bool ProjectStore::commit(std::string& e){return exec("COMMIT",{},e);}
 void ProjectStore::rollback(){std::string ignore;exec("ROLLBACK",{},ignore);}
-void ProjectStore::close(){if(db.isValid()){db.close();db=QSqlDatabase();}if(!connection.isEmpty())QSqlDatabase::removeDatabase(connection);connection.clear();root.clear();name.clear();}
+void ProjectStore::close(){if(db.isValid()){db.close();db=QSqlDatabase();}if(!connection.isEmpty())QSqlDatabase::removeDatabase(connection);connection.clear();root.clear();name.clear();readOnly=false;}
 QString ProjectStore::absolutePath(const QString& p)const{return QFileInfo(p).isAbsolute()?p:QDir(root).absoluteFilePath(p);}
 // Additive and once per database: preserve IDs, manual edits and the original schema version.
 static bool ensureImportPerformanceSchema(ProjectStore& st,std::string& error){
@@ -57,14 +57,16 @@ static bool ensureImportPerformanceSchema(ProjectStore& st,std::string& error){
     for(const auto& sql:statements)if(!st.exec(sql,{},error)){st.rollback();return false;}
     if(!st.commit(error)){st.rollback();return false;}return true;
 }
-bool ProjectStore::open(const QString& directory,bool create,const QString& projectName,std::string& error){
-    close();QDir dir(directory);if(create){if(QFileInfo::exists(dir.filePath("data.sqlite"))){error="该目录已有工区，请使用打开工区";return false;}if(!dir.mkpath(".")){error="无法创建工区目录";return false;}}
+bool ProjectStore::open(const QString& directory,bool create,const QString& projectName,std::string& error,bool readonly){
+    close();error.clear();QDir dir(directory);if(create){if(QFileInfo::exists(dir.filePath("data.sqlite"))){error="该目录已有工区，请使用打开工区";return false;}if(!dir.mkpath(".")){error="无法创建工区目录";return false;}}
     if(!create&&!QFileInfo::exists(dir.filePath("data.sqlite"))){error="目录中没有 data.sqlite";return false;}
-    root=dir.absolutePath();static std::atomic<long long> serial{0};connection=QString("paleo_data_%1").arg(++serial);
+    readOnly=readonly;root=dir.absolutePath();static std::atomic<long long> serial{0};connection=QString("paleo_data_%1").arg(++serial);
     db=QSqlDatabase::addDatabase("QSQLITE",connection);db.setDatabaseName(dir.filePath("data.sqlite"));
+    if(readOnly)db.setConnectOptions("QSQLITE_OPEN_READONLY");
     if(!db.open()){error=s(db.lastError().text());close();return false;}
-    if(!exec("PRAGMA foreign_keys=ON",{},error)||!exec("PRAGMA busy_timeout=5000",{},error)||!exec("PRAGMA journal_mode=WAL",{},error))return false;
+    if(!exec("PRAGMA foreign_keys=ON",{},error)||!exec("PRAGMA busy_timeout=5000",{},error)||(!readOnly&&!exec("PRAGMA journal_mode=WAL",{},error))){close();return false;}
     if(!create){QSqlQuery r;if(!exec("SELECT value FROM ds_meta WHERE key='schema_version'",{},error,&r)||!r.next()||r.value(0).toInt()!=1){error="工区格式不受支持";close();return false;}if(!exec("SELECT value FROM ds_meta WHERE key='project_name'",{},error,&r))return false;if(r.next())name=r.value(0).toString();
+        if(readOnly)return true;
         // Additive upgrade: keep existing rows/IDs and handwritten edits intact.
         r.finish();bool hasSheet=false;
         if(!exec("PRAGMA table_info(log_sets)",{},error,&r))return false;

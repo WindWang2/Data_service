@@ -199,6 +199,7 @@ static bool doImport(ProjectStore& store,const QString& input,const QString& ide
     if(parsed.status=="failed"){e=parsed.message.empty()?"文件解析失败":parsed.message;return false;}return true;
 }
 bool DataService::importFile(const std::string& path,const ImportOptions& options,ImportReport& report,std::string& e,const CancelCheck& cancelled){
+    if(impl_->store.readOnly){report={};e="工区以只读方式打开，不能导入或重导入";return false;}
     report={};e.clear();MeasureTime measure(report.elapsedMs);bool ok=doImport(impl_->store,QFileInfo(q(path)).absoluteFilePath(),QFileInfo(q(path)).absoluteFilePath(),options,report,e,cancelled);if(!ok&&cancelled&&cancelled())report.cancelled=true;if(!ok&&!report.cancelled&&!report.failed)++report.failed;return ok;
 }
 static bool importPreparedDirectory(ProjectStore& store,const QStringList& files,const ImportOptions& options,
@@ -266,6 +267,7 @@ static bool importPreparedDirectory(ProjectStore& store,const QStringList& files
     if(report.failed){error="导入完成，部分文件失败；请查看来源和问题列表";return false;}return true;
 }
 bool DataService::importDirectory(const std::string& directory,const ImportOptions& options,ImportReport& report,std::string& e,const ProgressCallback& progress,const CancelCheck& cancelled){
+    if(impl_->store.readOnly){report={};e="工区以只读方式打开，不能导入或重导入";return false;}
     report={};e.clear();MeasureTime measure(report.elapsedMs);QDir input(q(directory));if(!input.exists()){e="输入目录不存在";return false;}if(!impl_->store.db.isOpen()){e="请先打开工区";return false;}
     // Walk one directory at a time so we can prune the project's copied sources entirely.
     // The old recursive iterator entered the whole project before discarding its files.
@@ -296,6 +298,7 @@ bool DataService::importDirectory(const std::string& directory,const ImportOptio
     }if(report.cancelled){e="导入已取消，当前文件未发布，已完成文件保留";return false;}if(report.failed){e="导入完成，部分文件失败；请查看来源和问题列表";return false;}return true;
 }
 bool DataService::reimportSource(long long id,const ParseOptions& mapping,ImportReport& report,std::string& e,const CancelCheck& cancelled){
+    if(impl_->store.readOnly){report={};e="工区以只读方式打开，不能导入或重导入";return false;}
     report={};e.clear();MeasureTime measure(report.elapsedMs);QSqlQuery r;if(!impl_->store.exec("SELECT original_path,stored_path FROM sources WHERE id=?",{id},e,&r))return false;if(!r.next()){e="来源不存在";return false;}
     auto path=impl_->store.absolutePath(r.value(1).toString());ImportOptions options;options.parsing=mapping;options.forceNewBatch=true;return doImport(impl_->store,path,r.value(0).toString(),options,report,e,cancelled,id);
 }

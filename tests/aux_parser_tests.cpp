@@ -22,7 +22,7 @@ static void workbook(const QString& path,const QString& name,const QList<QString
  QByteArray xml="<worksheet><sheetData>";int r=0;
  for(const auto& row:rows) {xml+="<row r=\""+QByteArray::number(++r)+"\">";for(const auto& text:row)xml+="<c t=\"inlineStr\"><is><t>"+text.toHtmlEscaped().toUtf8()+"</t></is></c>";xml+="</row>";}
  xml+="</sheetData></worksheet>";QString error;
- require(paleo::io::zipWriteArchive(path,{
+ require(paleo::data::zip::zipWriteArchive(path,{
   {"xl/workbook.xml","<workbook xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\""+name.toHtmlEscaped().toUtf8()+"\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"},
   {"xl/_rels/workbook.xml.rels","<Relationships><Relationship Id=\"rId1\" Target=\"worksheets/sheet1.xml\"/></Relationships>"},
   {"xl/worksheets/sheet1.xml",xml}},{},&error),utf8(error));
@@ -40,13 +40,13 @@ int main(int argc,char**argv) {
   QString error;
   const auto doc=temp.filePath("正文.docx");
   const QByteArray xml=QStringLiteral("<?xml version=\"1.0\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>HZ84-4-1 100～101m 粒面球藻</w:t></w:r></w:p></w:body></w:document>").toUtf8();
-  require(paleo::io::zipWriteArchive(doc,{{"word/document.xml",xml}},{},&error),utf8(error));
+  require(paleo::data::zip::zipWriteArchive(doc,{{"word/document.xml",xml}},{},&error),utf8(error));
   const auto text=parseAuxiliaryFile(utf8(doc),{},{});
   require(text.status=="parsed"&&text.documentText.find("粒面球藻")!=std::string::npos,"DOCX body extraction");
   require(text.wells.empty(),"document captions must not fabricate samples");
   // File-backed Office text extraction must work past the former 512 MiB
   // whole-archive limit, without reading the large sparse prefix into memory.
-  auto officeBytes=paleo::io::zipBuildArchive({{"word/document.xml",xml}},{},&error);
+  auto officeBytes=paleo::data::zip::zipBuildArchive({{"word/document.xml",xml}},{},&error);
   require(!officeBytes.isEmpty(),utf8(error));
   const int eocd=int(officeBytes.size())-22;
   const auto directory=qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(officeBytes.constData()+eocd+16));
@@ -57,13 +57,13 @@ int main(int argc,char**argv) {
   {QFile f(largeDoc);require(f.open(QIODevice::WriteOnly)&&f.seek(prefix)&&f.write(officeBytes)==officeBytes.size(),"large sparse Office fixture");}
   const auto largeText=parseAuxiliaryFile(utf8(largeDoc),{},{});
   require(largeText.status=="parsed"&&largeText.documentText==text.documentText,"bounded Office reads beyond 512MiB");
-  auto damaged=paleo::io::zipBuildArchive({{"word/document.xml",xml}},{},&error);
+  auto damaged=paleo::data::zip::zipBuildArchive({{"word/document.xml",xml}},{},&error);
   const int damageAt=damaged.indexOf("HZ84-4-1");require(damageAt>=0,"CRC fixture text");damaged[damageAt]='X';
   const auto badDoc=temp.filePath("bad-crc.docx");{QFile f(badDoc);require(f.open(QIODevice::WriteOnly),"CRC fixture file");f.write(damaged);}
   require(parseAuxiliaryFile(utf8(badDoc),{},{}).status=="failed","Office CRC mismatch must remain visible");
   const auto sheet=temp.filePath("HZ99-1-1样品分析.xlsx");
   const QByteArray sheetXml=QStringLiteral("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><dimension ref=\"A1:F30\"/><sheetData><row r=\"2\"><c r=\"B2\" t=\"inlineStr\"><is><t>井深m</t></is></c><c r=\"E2\" t=\"inlineStr\"><is><t>Li ppm</t></is></c></row><row r=\"3\"><c r=\"B3\"><v>100</v></c><c r=\"C3\" t=\"inlineStr\"><is><t>～</t></is></c><c r=\"D3\"><v>101</v></c><c r=\"E3\" t=\"inlineStr\"><is><t>&lt;0.01</t></is></c></row><row r=\"4\"><c r=\"B4\"><v>102</v></c><c r=\"C4\" t=\"inlineStr\"><is><t>～</t></is></c><c r=\"D4\"><v>103</v></c><c r=\"E4\"><v>1.25</v></c></row><row r=\"27\"><c r=\"F27\"><f>1+1</f></c></row></sheetData></worksheet>").toUtf8();
-  require(paleo::io::zipWriteArchive(sheet,{
+  require(paleo::data::zip::zipWriteArchive(sheet,{
    {"xl/workbook.xml","<workbook xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"样品表\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"},
    {"xl/_rels/workbook.xml.rels","<Relationships><Relationship Id=\"rId1\" Target=\"worksheets/sheet1.xml\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\"/></Relationships>"},
    {"xl/worksheets/sheet1.xml",sheetXml}},{},&error),utf8(error));

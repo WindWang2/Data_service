@@ -25,8 +25,9 @@ class ProjectStore {
 public:
     QSqlDatabase db;
     QString root, name, connection;
+    bool readOnly=false;
     ~ProjectStore(){close();}
-    bool open(const QString& directory,bool create,const QString& projectName,std::string& error);
+    bool open(const QString& directory,bool create,const QString& projectName,std::string& error,bool readOnly=false);
     void close();
     bool exec(const QString& sql,const QVariantList& args,std::string& error,QSqlQuery* result=nullptr) const;
     bool begin(std::string& error);

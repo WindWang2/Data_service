@@ -89,6 +89,8 @@ if (service.readCurveSlice(curveId, paleo::data::Missing,
 
 ## 阅读顺序
 
+- [宿主嵌入、资产版本目录与只读会话](docs/workstation-embedding.md)
+
 - [接口与界面演示](docs/api-demo.md)
 - [怎样读懂一次 C++ 调用](docs/cpp-reading-guide.md)
 - [十一个完整入门案例](examples/getting_started/README.md)

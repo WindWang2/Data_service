@@ -201,6 +201,8 @@ public:
     // kind: curves曲线、intervals分层道、samples样品表、time_depth时深、trajectories测斜，
     // 或 markers、core_photos、attachments、horizons、maps、volumes、sections、tables。
     bool listData(const std::string& kind, long long wellId, std::vector<DataEntry>& result, std::string& error) const;
+    // Filter in SQLite, without listing every other source in the work area.
+    bool listSourceData(const std::string& kind, long long sourceId, std::vector<DataEntry>& result, std::string& error) const;
     bool readTable(const std::string& kind, long long id, long long offset, int limit, DataTable& result, std::string& error) const;
     // 真正读取曲线数组。范围含端点；topDepth/bottomDepth 为 Missing 时不限制相应端。
     // processed=true 读取处理值，false 读取原值；两种模式都返回 rawValues 与 quality。

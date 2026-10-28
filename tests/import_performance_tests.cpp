@@ -300,7 +300,8 @@ void legacyMigration(const QString& root){
     check(service.importFile(utf8(path),options,report,error)&&report.skipped==1&&report.cached==1&&report.hashedBytes==0,"migrated source is cached after first verified repeat");
     checkEditedCurve(service,id);
     Database migrated(project);
-    check(migrated.scalar("SELECT value FROM ds_meta WHERE key='import_performance_schema'").toString()=="1","performance migration recorded");
+    check(migrated.scalar("SELECT value FROM ds_meta WHERE key='import_performance_schema'").toString()=="2","performance migration recorded");
+    check(migrated.scalar("SELECT count(*) FROM sqlite_master WHERE type='index' AND name='log_sets_source'").toInt()==1,"source-filter index created");
     check(migrated.scalar("SELECT count(*) FROM source_scan_cache").toInt()==1,"migration populated cache");
     check(migrated.scalar("PRAGMA integrity_check").toString()=="ok","migration maintains database integrity");
 }

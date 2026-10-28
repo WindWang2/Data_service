@@ -39,20 +39,25 @@ QString ProjectStore::absolutePath(const QString& p)const{return QFileInfo(p).is
 static bool ensureImportPerformanceSchema(ProjectStore& st,std::string& error){
     QSqlQuery existing;
     if(!st.exec("SELECT value FROM ds_meta WHERE key='import_performance_schema'",{},error,&existing))return false;
-    if(existing.next()&&existing.value(0).toString()=="1")return true;
+    if(existing.next()&&existing.value(0).toString()=="2")return true;
     existing.finish();
     if(!st.begin(error))return false;
     const QStringList statements={
         "CREATE TABLE IF NOT EXISTS source_scan_cache(source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,signature TEXT NOT NULL)",
         "CREATE INDEX IF NOT EXISTS issues_source_resolved ON issues(source_id,resolved)",
         "CREATE INDEX IF NOT EXISTS log_sets_well ON log_sets(well_id)",
+        "CREATE INDEX IF NOT EXISTS log_sets_source ON log_sets(source_id)",
         "CREATE INDEX IF NOT EXISTS curves_set ON curves(set_id)",
         "CREATE INDEX IF NOT EXISTS tracks_well ON tracks(well_id)",
+        "CREATE INDEX IF NOT EXISTS tracks_source ON tracks(source_id)",
         "CREATE INDEX IF NOT EXISTS sample_tables_well ON sample_tables(well_id)",
+        "CREATE INDEX IF NOT EXISTS sample_tables_source ON sample_tables(source_id)",
+        "CREATE INDEX IF NOT EXISTS source_tables_source ON source_tables(source_id)",
         "CREATE INDEX IF NOT EXISTS samples_table ON samples(table_id)",
         "CREATE INDEX IF NOT EXISTS measurements_sample ON measurements(sample_id)",
         "CREATE INDEX IF NOT EXISTS well_objects_well_kind ON well_objects(well_id,kind)",
-        "INSERT OR REPLACE INTO ds_meta(key,value) VALUES('import_performance_schema','1')"
+        "CREATE INDEX IF NOT EXISTS well_objects_source_kind ON well_objects(source_id,kind)",
+        "INSERT OR REPLACE INTO ds_meta(key,value) VALUES('import_performance_schema','2')"
     };
     for(const auto& sql:statements)if(!st.exec(sql,{},error)){st.rollback();return false;}
     if(!st.commit(error)){st.rollback();return false;}return true;

@@ -33,7 +33,7 @@ public:
     bool begin(std::string& error);
     bool commit(std::string& error);
     void rollback();
-    bool saveParsed(long long sourceId,const ParsedFile& file,const ParseOptions& options,std::string& error,const CancelCheck& cancelled={});
+    bool saveParsed(long long sourceId,const ParsedFile& file,const ParseOptions& options,std::string& error,const CancelCheck& cancelled={},bool inputNullsResolved=false);
     bool removeSourceObjects(long long sourceId,std::string& error);
     bool ensureWell(const WellInfo& info,long long& id,std::string& error);
     QString absolutePath(const QString& storedPath) const;

@@ -34,3 +34,29 @@ WAL readers may still use sidecar files; this is not an immutable snapshot mode.
 Tests generate temporary inputs and cover reopen, rollback, access mode, UTF-8,
 unknown catalog metadata and rejected mutations. No workstation dependency or
 private project is needed.
+
+## Publishing a prepared immutable version
+
+`DataService::importPreparedFile` accepts a `ParsedFile` already normalized by a
+trusted host format adapter. Pass the currently readable file, its original
+identity, the source reference that will be valid after publication, and the
+expected full SHA-256. The reference may be relative to the data project for a
+relocatable managed source. This method neither copies nor rewrites the source.
+
+The service checks the source digest before storing and again before commit.
+Objects and the source record are committed together; shape errors, cancellation
+and content drift roll back both. It returns a database-local source ID. The host
+must publish the resulting database with its own version journal and retain the
+explicit source/object mapping. The API does not make a second writable catalog
+or silently coordinate transactions across independently writable databases.
+
+Prepared curve values must already contain NaN for source-declared missing cells.
+Finite negative values, including -999 and -99999, are retained. Ordinary file
+imports keep their existing parsing and null-value rules; `ParseOptions` has no
+host-only switch. Workstation-specific columns may use the public `SourceTable`
+store alongside the typed objects to preserve fields not yet in the shared model.
+
+Close the writer before hashing/publishing its SQLite file, then use read-only
+sessions on consuming threads. A host using immutable versions should create a
+new prepared model for edits and reimports, rather than mutate a published model
+or ask the ordinary parser to reconstruct its host-specific interpretation.

@@ -320,6 +320,6 @@ bool DataService::relocateSource(long long id,const std::string& path,std::strin
     bool ok=st.exec("UPDATE sources SET stored_path=? WHERE id=?",{replacement,id},e)&&st.exec("UPDATE volumes SET path=? WHERE source_id=?",{replacement,id},e)&&st.exec("UPDATE maps SET image_path=CASE WHEN image_path=? THEN ? ELSE image_path END,source_file=CASE WHEN source_file=? THEN ? ELSE source_file END WHERE source_id=?",{previous,replacement,previous,replacement,id},e)&&st.exec("INSERT INTO changes(kind,entity_id,description) VALUES('source',?,'核验文件身份后重新定位来源')",{id},e)&&st.commit(e);if(!ok)st.rollback();return ok;
 }
 bool DataService::verifySource(long long id,std::string& e)const{
-    QSqlQuery r;const auto& st=impl_->store;if(!st.exec("SELECT hash,stored_path FROM sources WHERE id=?",{id},e,&r))return false;if(!r.next()){e="来源不存在";return false;}QString digest;if(!digestFile(st.absolutePath(r.value(1).toString()),digest,{},e))return false;if(digest!=r.value(0).toString()){e="来源文件已改变，请核对后重新导入，不能继续使用旧对象读取";return false;}return true;
+    QSqlQuery r;const auto& st=impl_->store;if(!st.exec("SELECT hash,stored_path FROM sources WHERE id=?",{id},e,&r))return false;if(!r.next()){e="来源不存在";return false;}QString digest;const auto expected=r.value(0).toString();const auto path=st.absolutePath(r.value(1).toString());if(expected.startsWith("quick:")?!digestFile(path,digest,{},e):!fullFileSha256(path,digest,e))return false;if(digest!=expected){e="来源文件已改变，请核对后重新导入，不能继续使用旧对象读取";return false;}return true;
 }
 }

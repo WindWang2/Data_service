@@ -181,6 +181,14 @@ public:
     std::string projectName() const;
     bool importDirectory(const std::string& directory, const ImportOptions& options, ImportReport& result, std::string& error, const ProgressCallback& progress={}, const CancelCheck& cancelled={});
     bool importFile(const std::string& path, const ImportOptions& options, ImportReport& result, std::string& error, const CancelCheck& cancelled={});
+    // Persist a host-prepared, normalized model without reparsing or copying.
+    // expectedSha256 binds it to readablePath; storedReference is interpreted
+    // relative to this data project after its enclosing directory is published.
+    // The caller owns parsing correctness and publication of that directory.
+    bool importPreparedFile(const std::string& readablePath, const std::string& identityPath,
+                            const std::string& storedReference, const std::string& expectedSha256,
+                            const ParsedFile& model, long long& sourceId, std::string& error,
+                            const CancelCheck& cancelled={});
     bool listWells(std::vector<WellSummary>& result, std::string& error) const;
     bool readWellInfo(long long wellId, WellInfo& result, std::string& error) const;
     bool saveWellInfo(long long wellId, const WellInfo& value, std::string& error);

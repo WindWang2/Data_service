@@ -355,10 +355,61 @@ bool isDepthHeader(const QString& t) {
 bool matches(const QString& t,const QStringList& keys) {const auto k=key(t);for(const auto& word:keys) if(k==word||k.startsWith(word+"(")||k.startsWith(word+QStringLiteral("（"))) return true;return false;}
 struct Block {int row=0,depth=0,bottom=0,separator=0,name=0,well=0,type=0,end=0,start=0; bool interval=false;};
 
-QString workbookWell(ParsedFile& out,const ParseOptions& options) {
+int mapCoordinates(ParsedFile& out,const ParseOptions& options,const CancelCheck& cancel,QSet<QString>& handled) {
+    int mapped=0;QSet<QString> blocked;
+    for(const auto& table:out.sourceTables) {
+        Rows headers;for(const auto& cell:table.cells)if(cell.row<=60)headers[cell.row][cell.column]=qs(cell.text);
+        const auto sheet=qs(table.sheetName);
+        for(auto header=headers.cbegin();header!=headers.cend();++header) {
+            int name=0,x=0,y=0;bool ambiguous=false,depth=false;
+            for(auto c=header->cbegin();c!=header->cend();++c) {
+                const auto label=key(c.value());int axis=0;
+                if(isDepthHeader(label)||matches(label,{"tvd","tvdss","顶深","底深"}))depth=true;
+                if(matches(label,{"井号","井名","well","wellname","well_name"})) {if(name)ambiguous=true;name=c.key();}
+                // Semantic labels take precedence over the literal X/Y prefixes.
+                if(label.contains(QStringLiteral("横坐标"))||label.contains(QStringLiteral("东坐标")))axis=1;
+                else if(label.contains(QStringLiteral("纵坐标"))||label.contains(QStringLiteral("北坐标")))axis=2;
+                else if(matches(label,{"x","easting","east"}))axis=1;
+                else if(matches(label,{"y","northing","north"}))axis=2;
+                if(axis==1){if(x)ambiguous=true;x=c.key();}
+                if(axis==2){if(y)ambiguous=true;y=c.key();}
+            }
+            if(!name||!x||!y||depth)continue; // A trajectory/sample position is not a wellhead.
+            handled.insert(sheet);
+            if(ambiguous){issue(out,"coordinate_columns_ambiguous","井位表存在重复坐标或井名列，保留原表待核对",sheet,header.key(),true);break;}
+            QSet<QString> seen;
+            const auto rows=rowsOf(table);
+            for(auto r=rows.upperBound(header.key());r!=rows.cend();++r) {
+                if((r.key()%128)==0&&stopped(cancel))return -1;
+                const auto wellName=qs(canonicalWellName(ss(r->value(name))));
+                if(wellName.isEmpty())continue;
+                double vx=Missing,vy=Missing;
+                const bool duplicate=seen.contains(wellName);seen.insert(wellName);
+                if(duplicate||!numeric(r->value(x),vx)||!numeric(r->value(y),vy)) {
+                    blocked.insert(wellName);
+                    for(auto& well:out.wells)if(qs(well.wellInfo.wellName)==wellName)well.wellInfo.wellheadX=well.wellInfo.wellheadY=Missing;
+                    issue(out,"coordinate_row_invalid","井位重复或坐标无效，未生成可定位坐标",sheet,r.key(),true,wellName);
+                    continue;
+                }
+                auto& info=wellFor(out,wellName).wellInfo;
+                if(blocked.contains(wellName))continue;
+                if(std::isfinite(info.wellheadX)&&(info.wellheadX!=vx||info.wellheadY!=vy)) {
+                    info.wellheadX=info.wellheadY=Missing;blocked.insert(wellName);
+                    issue(out,"coordinate_conflict","多个工作表的井位不一致，保留原表待核对",sheet,r.key(),true,wellName);continue;
+                }
+                info.wellheadX=vx;info.wellheadY=vy;info.coordinateSystem=options.coordinateSystem;info.coordinateUnit=options.coordinateUnit;++mapped;
+            }
+            if(options.coordinateSystem.empty()||options.coordinateUnit.empty())issue(out,"coordinate_reference_unknown","井口坐标已按明确表头读取；坐标系或单位未声明，使用前需确认",sheet,header.key());
+            break;
+        }
+    }return mapped;
+}
+
+QString workbookWell(ParsedFile& out,const ParseOptions& options,const QSet<QString>& ignored) {
     if(!options.wellNameOverride.empty()) return qs(options.wellNameOverride).trimmed().toUpper();
     const auto fromPath=pathWell(qs(options.sourceContextPath.empty()?out.path:options.sourceContextPath));QSet<QString> declared;
     for(const auto& table:out.sourceTables) {
+        if(ignored.contains(qs(table.sheetName)))continue;
         const auto rows=rowsOf(table);
         for(auto row=rows.cbegin();row!=rows.cend()&&row.key()<=60;++row) for(auto c=row->cbegin();c!=row->cend();++c) {
             const auto label=key(c.value());
@@ -780,6 +831,15 @@ bool readOfficeText(const QString& path,ParsedFile& out,const CancelCheck& cance
 }
 }
 
+bool mapWellCoordinateTables(ParsedFile& out,const ParseOptions& options,const CancelCheck& cancelled) {
+    QSet<QString> handled;const int count=mapCoordinates(out,options,cancelled,handled);
+    if(handled.empty())return false;
+    if(count<0){out.status="failed";out.message="已取消";out.wells.clear();return true;}
+    out.kind="coordinates";out.status=out.issues.empty()?"parsed":"review";
+    out.message="按明确表头读取 "+std::to_string(count)+" 条井位；原始单元格保留";
+    return true;
+}
+
 ParsedFile parseAuxiliaryFile(const std::string& path,const ParseOptions& options,const CancelCheck& cancelled) {
     ParsedFile out;out.path=path;
     const QFileInfo info(qs(path));const auto ext=info.suffix().toLower();
@@ -790,11 +850,12 @@ ParsedFile parseAuxiliaryFile(const std::string& path,const ParseOptions& option
         if(!readWorkbook(info.filePath(),out,cancelled,error)) {out.status="failed";out.message=ss(error);out.sourceTables.clear();return out;}
         if(stopped(cancelled)) {out.status="failed";out.message="已取消";out.sourceTables.clear();return out;}
         QSet<QString> handledSheets;
-        const auto well=workbookWell(out,options);
+        const int coordinates=mapCoordinates(out,options,cancelled,handledSheets);
+        const auto well=workbookWell(out,options,handledSheets);
         const int cards=mapGrainCards(out,options,cancelled,well,handledSheets);
         const int series=cards<0?-1:mapWellSeries(out,options,cancelled,well,handledSheets);
         const int rows=series<0?-1:mapSamples(out,options,cancelled,handledSheets,well);
-        const int count=rows<0?-1:cards+rows;
+        const int count=rows<0||coordinates<0?-1:cards+rows+coordinates;
         if(count<0||stopped(cancelled)) {out.status="failed";out.message="已取消";out.sourceTables.clear();out.wells.clear();out.issues.clear();return out;}
         // A warning alone does not stop the store from persisting well objects.
         // Conflicting identities must therefore expose original tables only,

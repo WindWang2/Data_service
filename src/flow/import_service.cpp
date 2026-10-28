@@ -204,6 +204,7 @@ bool DataService::importFile(const std::string& path,const ImportOptions& option
 }
 static bool importPreparedDirectory(ProjectStore& store,const QStringList& files,const ImportOptions& options,
     ImportReport& report,std::string& error,const ProgressCallback& progress,const CancelCheck& cancelled){
+    if(progress)progress({0,int(files.size()),{},"准备来源索引与解析线程"});
     QHash<QString,std::vector<KnownSource>> known;
     QSqlQuery rows;
     if(!store.exec("SELECT s.original_path,s.hash,coalesce(c.signature,'') FROM sources s LEFT JOIN source_scan_cache c ON c.source_id=s.id WHERE s.active=1 AND s.status<>'failed' AND s.options=?",{optionsJson(options.parsing)},error,&rows))return false;
@@ -221,12 +222,12 @@ static bool importPreparedDirectory(ProjectStore& store,const QStringList& files
         // These formats only yield bounded headers/attachment registrations, not full decoded media.
         // Hashing them uses a 1MiB buffer; a large archive/photo need not block all other workers.
         if(QStringList{"cdr","zip","rar","7z","mp4","mov","jpg","jpeg","png","bmp","gif","tif","tiff","sgy","segy","pdf"}.contains(ext))return 2LL*1024*1024;
-        if(size>=32LL*1024*1024)return budget; // One large expandable/unknown source at a time.
+        if(size>=32LL*1024*1024&&ext!="xml"&&ext!="las")return budget; // Compressed/unknown expansion stays isolated.
         const bool table=QStringList{"xml","xls","xlsx","las","csv","dat","txt",""}.contains(ext);
         // Count both running jobs AND completed results waiting for their turn.
         // SpreadsheetML is uncompressed and streamed row-by-row; the XML tags already
         // occupy most input bytes. XLSX/other tables need a larger expansion allowance.
-        const auto expansion=ext=="xml"?4LL:32LL;
+        const auto expansion=(ext=="xml"||ext=="las")?4LL:32LL;
         return std::min(budget,std::max(2LL*1024*1024,table?size*expansion:2LL*1024*1024));
     };
     long long reserved=0;int scheduled=0,completed=0;

@@ -15,6 +15,7 @@ struct WellSummary {
     bool hasCoordinates=false;
     int corePhotos=0, attachments=0, markerTracks=0;
 };
+struct WellInfoRecord { long long id=0; WellInfo value; };
 // 一条资料的“索引卡片”，用于选择要读取哪条资料，不携带全部采样值。
 // 拿到 id 后，调用 readCurveSlice / readIntervals / readTimeDepth 等读取实际数据。
 struct DataEntry {
@@ -83,7 +84,8 @@ struct ImportOptions {
     bool verifyUnchangedFiles=false;
     int parserThreads=2; // 目录导入的校验/解析线程数，限制为1–4；1用于串行运行。
     // 待解析/待发布任务的估计内存预算；不是进程内存硬上限。
-    // >=32MiB的表格等可展开资料单独准备；仅登记的照片/归档文件仍可并行校验。
+    // >=32MiB的压缩表格/未知大文件单独准备；XML/LAS按流式展开估算，可在预算内并行。
+    // 仅登记的照片/归档文件仍可并行校验。
     // 入库始终按文件顺序执行。
     long long maxPendingBytes=256LL*1024*1024;
     std::vector<std::string> excludedDirectories; // Explicit output/staging trees pruned before directory traversal.
@@ -195,6 +197,8 @@ public:
                             const CancelCheck& cancelled={});
     bool listWells(std::vector<WellSummary>& result, std::string& error) const;
     bool readWellInfo(long long wellId, WellInfo& result, std::string& error) const;
+    // Basic fields only: one query, no per-well counts or payload decoding.
+    bool listWellInfos(std::vector<WellInfoRecord>& result, std::string& error) const;
     bool saveWellInfo(long long wellId, const WellInfo& value, std::string& error);
     bool createWell(const WellInfo& value, long long& wellId, std::string& error);
     // 先列出资料卡片，供选择ID。wellId=0 表示不按井过滤，也包含待归井资料。

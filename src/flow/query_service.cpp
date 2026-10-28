@@ -26,6 +26,16 @@ bool DataService::listWells(std::vector<WellSummary>& out,std::string& e)const{
 bool DataService::readWellInfo(long long id,WellInfo& w,std::string& e)const{
     QSqlQuery r;if(!impl_->store.exec("SELECT name,field_name,well_type,x,y,crs,unit,total_depth,remark FROM wells WHERE id=?",{id},e,&r))return false;if(!r.next()){e="井不存在";return false;}w.wellName=s(r.value(0).toString());w.fieldName=s(r.value(1).toString());w.wellType=s(r.value(2).toString());w.wellheadX=value(r.value(3));w.wellheadY=value(r.value(4));w.coordinateSystem=s(r.value(5).toString());w.coordinateUnit=s(r.value(6).toString());w.totalDrilledDepth=value(r.value(7));w.remark=s(r.value(8).toString());return true;
 }
+bool DataService::listWellInfos(std::vector<WellInfoRecord>& out,std::string& e)const{
+    out.clear();QSqlQuery r;
+    if(!impl_->store.exec("SELECT id,name,field_name,well_type,x,y,crs,unit,total_depth,remark FROM wells ORDER BY id",{},e,&r))return false;
+    while(r.next()){
+        WellInfoRecord row;row.id=r.value(0).toLongLong();auto& w=row.value;
+        w.wellName=s(r.value(1).toString());w.fieldName=s(r.value(2).toString());w.wellType=s(r.value(3).toString());
+        w.wellheadX=value(r.value(4));w.wellheadY=value(r.value(5));w.coordinateSystem=s(r.value(6).toString());
+        w.coordinateUnit=s(r.value(7).toString());w.totalDrilledDepth=value(r.value(8));w.remark=s(r.value(9).toString());out.push_back(std::move(row));
+    }return true;
+}
 static bool listEntries(const ProjectStore& store,const std::string& kind,long long wellId,long long sourceId,std::vector<DataEntry>& out,std::string& e){
     out.clear();QString sql;QVariantList args;
     if(kind=="curves")sql="SELECT c.id,l.well_id,l.source_id,l.id,c.name,c.unit||' / '||l.name,l.sample_count FROM curves c JOIN log_sets l ON l.id=c.set_id WHERE (?<=0 OR l.well_id=?) ORDER BY l.id,c.id";

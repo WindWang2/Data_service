@@ -106,7 +106,7 @@ bool ImagePreview::load(const QString& path,QString& error) {
     caption_=loaded?QFileInfo(path).fileName():QStringLiteral("图片预览失败：%1").arg(error);
     updateControls();update();return loaded;
 }
-void ImagePreview::clear(){image_={};caption_.clear();sectionMode_=false;wallMode_=false;wallPoints_.clear();wallColumns_.clear();wallSamples_.clear();fit_=true;zoom_=1;pan_={};updateControls();update();}
+void ImagePreview::clear(){partial_=false;partialScale_=1;image_={};caption_.clear();sectionMode_=false;wallMode_=false;wallPoints_.clear();wallColumns_.clear();wallSamples_.clear();fit_=true;zoom_=1;pan_={};updateControls();update();}
 namespace {
 constexpr qint64 MaximumSeismicPixels=64000000;
 QRgb amplitudePixel(float amplitude,float maximum){
@@ -134,6 +134,23 @@ void ImagePreview::setTimeSlice(const SeismicTimeSliceResult& s){
         .arg(s.actualTime).arg(QString::fromStdString(s.timeUnit)).arg(s.inlineNumbers.front()).arg(s.inlineNumbers.back()).arg(s.crosslineNumbers.front()).arg(s.crosslineNumbers.back()).arg(rows).arg(columns);
     if(s.decimated)caption_+=QStringLiteral(" · 当前为抽样预览");updateControls();update();
 }
+bool ImagePreview::applyTimeSliceTile(const SeismicTimeSliceTile& tile){
+    const qint64 cells=qint64(tile.totalInlineCount)*tile.totalCrosslineCount;
+    if(tile.totalInlineCount<=0||tile.totalCrosslineCount<=0||cells>MaximumSeismicPixels||
+       tile.inlineCount<=0||tile.crosslineCount<=0||tile.inlineOffset<0||tile.crosslineOffset<0||
+       qint64(tile.inlineOffset)+tile.inlineCount>tile.totalInlineCount||qint64(tile.crosslineOffset)+tile.crosslineCount>tile.totalCrosslineCount||
+       tile.amplitudes.size()!=size_t(tile.inlineCount)*tile.crosslineCount){clear();caption_=QStringLiteral("分块尺寸无效，未发布图像");return false;}
+    const QSize size(tile.totalCrosslineCount,tile.totalInlineCount);
+    if(!partial_){
+        clear();image_=QImage(size,QImage::Format_RGB32);if(image_.isNull()){caption_=QStringLiteral("无法分配切片图像内存");return false;}
+        image_.fill(qRgb(225,225,225));partial_=true;partialScale_=amplitudeMaximum(tile.amplitudes);
+    }else if(image_.size()!=size){clear();caption_=QStringLiteral("分块所属网格已变化");return false;}
+    for(int y=0;y<tile.inlineCount;++y){auto* pixels=reinterpret_cast<QRgb*>(image_.scanLine(tile.inlineOffset+y));
+        for(int x=0;x<tile.crosslineCount;++x)pixels[tile.crosslineOffset+x]=amplitudePixel(tile.amplitudes[size_t(y)*tile.crosslineCount+x],partialScale_);}
+    caption_=QStringLiteral("时间 %1 %2 · 已读取 %3 / %4 块 · 临时色标，完整返回后统一重绘 · 灰色区域尚未读取 · 完成前不能导出")
+        .arg(tile.actualTime).arg(QString::fromStdString(tile.timeUnit)).arg(tile.completedTiles).arg(tile.totalTiles);
+    updateControls();update();return true;
+}
 void ImagePreview::setSection(const SeismicSectionResult& s){
     clear();sectionMode_=true;
     if(s.columns<=0||s.samples<=0||qint64(s.columns)*s.samples>MaximumSeismicPixels||s.amplitudes.size()!=static_cast<size_t>(s.columns)*s.samples){caption_=QStringLiteral("剖面尺寸不一致或超过 6400 万像素预算");return;}
@@ -154,7 +171,7 @@ void ImagePreview::setSection(const SeismicSectionResult& s){
 }
 void ImagePreview::updateControls(){
     if(!wallButton_)return;wallButton_->setEnabled(hasWallGeometry());wallButton_->setChecked(wallMode_);
-    rotateButton_->setEnabled(wallMode_);exportButton_->setEnabled(!image_.isNull());
+    rotateButton_->setEnabled(wallMode_);exportButton_->setEnabled(!image_.isNull()&&!partial_);
 }
 QRectF ImagePreview::plotArea() const {return QRectF(12,48,std::max(1,width()-24),std::max(1,height()-116));}
 QRectF ImagePreview::imageTarget(const QRectF& area) const {
@@ -174,7 +191,7 @@ void ImagePreview::mousePressEvent(QMouseEvent* event){if(event->button()==Qt::L
 void ImagePreview::mouseMoveEvent(QMouseEvent* event){if(dragging_){pan_+=event->position()-lastMouse_;lastMouse_=event->position();update();event->accept();}else QWidget::mouseMoveEvent(event);}
 void ImagePreview::mouseReleaseEvent(QMouseEvent* event){if(event->button()==Qt::LeftButton&&dragging_){dragging_=false;unsetCursor();event->accept();}else QWidget::mouseReleaseEvent(event);}
 void ImagePreview::mouseDoubleClickEvent(QMouseEvent* event){if(event->button()==Qt::LeftButton){fitToWindow();event->accept();}else QWidget::mouseDoubleClickEvent(event);}
-bool ImagePreview::exportImage(const QString& path,QString& error)const{return savePng(image_,path,error);}
+bool ImagePreview::exportImage(const QString& path,QString& error)const{if(partial_){error=QStringLiteral("切片仍在加载，不能导出不完整图像");return false;}return savePng(image_,path,error);}
 bool ImagePreview::exportWallImage(const QString& path,QString& error,QSize size)const{
     error.clear();if(image_.isNull()||!hasWallGeometry()){error=QStringLiteral("没有有效坐标路径，无法导出剖面墙");return false;}
     if(size.width()<320||size.height()<240||qint64(size.width())*size.height()>16000000){error=QStringLiteral("剖面墙输出至少 320 × 240，最多 1600 万像素");return false;}
@@ -190,7 +207,7 @@ void ImagePreview::chooseExport(bool wall){
 void ImagePreview::contextMenuEvent(QContextMenuEvent* event){
     QMenu menu(this);menu.addAction(QStringLiteral("适应窗口"),this,[this]{fitToWindow();});menu.addAction(QStringLiteral("1:1 原始样点"),this,[this]{actualPixels();});
     auto* wall=menu.addAction(QStringLiteral("展开剖面 / 立体剖面墙"),this,[this]{setWallMode(!wallMode_);});wall->setEnabled(hasWallGeometry());
-    auto* save=menu.addAction(QStringLiteral("导出完整分辨率 PNG"),this,[this]{chooseExport(false);});save->setEnabled(!image_.isNull());
+    auto* save=menu.addAction(QStringLiteral("导出完整分辨率 PNG"),this,[this]{chooseExport(false);});save->setEnabled(!image_.isNull()&&!partial_);
     auto* fence=menu.addAction(QStringLiteral("导出高清剖面墙 PNG"),this,[this]{chooseExport(true);});fence->setEnabled(hasWallGeometry());menu.exec(event->globalPos());
 }
 void ImagePreview::drawWall(QPainter& p,const QRectF& area,double zoom,QPointF pan)const{

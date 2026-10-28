@@ -21,7 +21,7 @@ Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'packaging/portable') -File 
     $content=[IO.File]::ReadAllText($_.FullName).Replace("`r`n","`n").Replace("`n","`r`n")
     [IO.File]::WriteAllText((Join-Path $packageRoot $_.Name),$content,[Text.UTF8Encoding]::new($false))
 }
-foreach($document in @('requirements.md','api-demo.md','cpp-reading-guide.md','portable-testing.md','segyio-guide.md','hd-seismic.md','import-performance.md','data-model.html')){
+foreach($document in @('requirements.md','api-demo.md','cpp-reading-guide.md','portable-testing.md','segyio-guide.md','hd-seismic.md','time-slice-performance.md','import-performance.md','data-model.html')){
     $file=Join-Path $PSScriptRoot ('docs/'+$document)
     if(Test-Path -LiteralPath $file){Copy-Item -LiteralPath $file -Destination (Join-Path $packageRoot 'docs')}
 }

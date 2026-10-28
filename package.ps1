@@ -35,7 +35,7 @@ if($DependencyRoot){$searchDirs+=(Join-Path $DependencyRoot 'bin')}
 $systemRoot=[IO.Path]::GetFullPath($env:WINDIR).TrimEnd('\')
 $searchDirs+=($env:PATH -split ';' | Where-Object {$_ -and (Test-Path -LiteralPath $_ -PathType Container) -and -not ([IO.Path]::GetFullPath($_).TrimEnd('\').StartsWith($systemRoot,[StringComparison]::OrdinalIgnoreCase))})
 $env:PATH=($searchDirs -join ';')+';'+$env:PATH
-foreach($name in @('paleo_data_demo.exe','paleo_data_cli.exe','facies_feature_example.exe','service_tests.exe','aux_parser_tests.exe','text_parser_tests.exe','seismic_service_tests.exe','seismic_hd_tests.exe','create_api_demo_project.exe','api_demo_tests.exe','spreadsheet_xml_tests.exe','core_asset_tests.exe','format_compatibility_tests.exe','image_preview_tests.exe','segyio_access_tests.exe','seismic_processing_tests.exe','seismic_ui_tests.exe','segyio_bounds_tests.exe','segyio_acceptance.exe','import_performance_tests.exe','file_digest_tests.exe')){
+foreach($name in @('paleo_data_demo.exe','paleo_data_cli.exe','facies_feature_example.exe','service_tests.exe','aux_parser_tests.exe','text_parser_tests.exe','seismic_service_tests.exe','seismic_hd_tests.exe','timeslice_batch_tests.exe','timeslice_benchmark.exe','create_api_demo_project.exe','api_demo_tests.exe','spreadsheet_xml_tests.exe','core_asset_tests.exe','format_compatibility_tests.exe','image_preview_tests.exe','segyio_access_tests.exe','seismic_processing_tests.exe','seismic_ui_tests.exe','segyio_bounds_tests.exe','segyio_acceptance.exe','import_performance_tests.exe','file_digest_tests.exe')){
     $file=Join-Path $binaryDirectory $name
     if(Test-Path -LiteralPath $file){Copy-Item -LiteralPath $file -Destination $OutputDirectory}
 }
@@ -113,7 +113,7 @@ while($queue.Count){
 @('[Paths]','Prefix=.','Plugins=.','Translations=translations') | Set-Content -LiteralPath (Join-Path $OutputDirectory 'qt.conf') -Encoding utf8
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $OutputDirectory '使用说明.md')
 $docsOutput=Join-Path $OutputDirectory 'docs';New-Item -ItemType Directory -Path $docsOutput | Out-Null
-foreach($document in @('api-demo.md','cpp-reading-guide.md','segyio-guide.md','hd-seismic.md','import-performance.md','portable-testing.md')){
+foreach($document in @('api-demo.md','cpp-reading-guide.md','segyio-guide.md','hd-seismic.md','time-slice-performance.md','import-performance.md','portable-testing.md')){
     $file=Join-Path $PSScriptRoot ('docs/'+$document)
     if(Test-Path -LiteralPath $file){Copy-Item -LiteralPath $file -Destination $docsOutput}
 }

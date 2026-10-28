@@ -1,6 +1,7 @@
 // Business adapter: metadata stays in SQLite; SEG-Y bytes are read on demand via segyio.
 #include "paleo_data/service.h"
 #include "segy_reader.h"
+#include "time_slice_reader.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -142,32 +143,10 @@ std::vector<int> previewPathColumns(int total,int target,const std::vector<int>&
     selected.push_back(vertices.back());return selected;
 }
 bool timeSliceFromReader(segy_detail::Reader& reader,double time,const TimeSliceReadOptions& options,
-                          SeismicTimeSliceResult& result,std::string& error,const CancelCheck& cancel,bool strictCoordinates=false,double residualLimit=3.0){
-    if(!std::isfinite(time)||(!options.fullResolution&&(options.maxInlineCount<1||options.maxInlineCount>4096||options.maxCrosslineCount<1||options.maxCrosslineCount>4096))||options.maxValues<1||options.maxValues>ValueLimit)
-        return reject(error,"时间切片参数无效：预览轴上限1–4096，振幅预算最多64000000");
-    if(!geometry(reader,error))return false;
-    const auto& facts=reader.info();const double sample=(time-facts.firstTime)/facts.sampleInterval;
-    if(sample<0||sample>facts.sampleCount-1)return reject(error,"请求时间超出地震体采样范围");
-    const int sampleIndex=static_cast<int>(std::round(sample));
-    SeismicTimeSliceResult output;
-    output.nativeInlineCount=static_cast<int>(reader.inlines().size());output.nativeCrosslineCount=static_cast<int>(reader.crosslines().size());
-    output.inlineNumbers=options.fullResolution?reader.inlines():selectedAxis(reader.inlines(),options.maxInlineCount);
-    output.crosslineNumbers=options.fullResolution?reader.crosslines():selectedAxis(reader.crosslines(),options.maxCrosslineCount);
-    output.decimated=output.inlineNumbers.size()!=reader.inlines().size()||output.crosslineNumbers.size()!=reader.crosslines().size();
-    const long long cells=static_cast<long long>(output.inlineNumbers.size())*output.crosslineNumbers.size();
-    if(cells<1||cells>options.maxValues)return reject(error,"切片需要"+std::to_string(cells)+"个振幅，超过maxValues预算；请显式提高预算或选择预览模式，高清模式不会自动降低分辨率");
-    output.actualTime=facts.firstTime+sampleIndex*facts.sampleInterval;output.timeUnit="ms";
-    output.x.reserve(cells);output.y.reserve(cells);output.amplitudes.reserve(cells);bool any=false;
-    for(int il:output.inlineNumbers)for(int xl:output.crosslineNumbers){
-        if(stopped(cancel,error))return false;
-        double x=Missing,y=Missing;reader.mapLine(il,xl,x,y);float amplitude=std::numeric_limits<float>::quiet_NaN();
-        const long long ordinal=reader.traceIndex(il,xl);
-        if(ordinal>=0){SeismicTraceResult trace;if(!reader.readTrace(ordinal,sampleIndex,1,trace,error,cancel))return false;
-            if(strictCoordinates&&!checkCoordinate(reader,il,xl,trace,residualLimit,error))return false;
-            x=trace.x;y=trace.y;amplitude=trace.amplitudes.front();any|=std::isfinite(amplitude);}
-        output.x.push_back(x);output.y.push_back(y);output.amplitudes.push_back(amplitude);
-    }
-    if(!any)return reject(error,"时间切片没有有限振幅");if(stopped(cancel,error))return false;result=std::move(output);return true;
+                          SeismicTimeSliceResult& result,std::string& error,const CancelCheck& cancel,
+                          const TimeSliceTileCallback& tileReady,bool strictCoordinates=false,double residualLimit=3.0){
+    return segy_detail::readSliceTiled(reader,time,options,result,error,cancel,tileReady,strictCoordinates,residualLimit);
+
 }
 }
 
@@ -221,17 +200,21 @@ bool DataService::readSeismicLine(long long volumeId,const std::string& directio
         if(!any)return reject(error,"测线没有有限振幅");if(stopped(cancel,error))return false;result=std::move(output);return true;
     }catch(const std::exception& e){return reject(error,std::string("地震测线读取失败：")+e.what());}
 }
-bool DataService::readSeismicTimeSlice(long long volumeId,double timeMs,const TimeSliceReadOptions& options,SeismicTimeSliceResult& result,std::string& error,const CancelCheck& cancel){
+bool DataService::readSeismicTimeSlice(long long volumeId,double timeMs,const TimeSliceReadOptions& options,SeismicTimeSliceResult& result,std::string& error,const CancelCheck& cancel,const TimeSliceTileCallback& tileReady){
     result={};error.clear();try{if(stopped(cancel,error))return false;SeismicVolume volume;if(!sourceVolume(*this,volumeId,volume,error))return false;
         segy_detail::Reader reader;if(!reader.open(volume.dataFile,error,cancel))return false;
-        return timeSliceFromReader(reader,timeMs,options,result,error,cancel);
+        return timeSliceFromReader(reader,timeMs,options,result,error,cancel,tileReady);
     }catch(const std::exception& e){return reject(error,std::string("原生时间切片读取失败：")+e.what());}
 }
-bool DataService::readTimeSlice(long long volumeId,double time,const TimeSliceReadOptions& options,SeismicTimeSliceResult& result,std::string& error,const CancelCheck& cancel){
+void DataService::clearSeismicSliceCache(){segy_detail::clearSliceCache();}
+
+bool DataService::readTimeSlice(long long volumeId,double time,const TimeSliceReadOptions& options,SeismicTimeSliceResult& result,std::string& error,const CancelCheck& cancel,const TimeSliceTileCallback& tileReady){
     result={};error.clear();try{if(stopped(cancel,error))return false;SeismicVolume volume;if(!sourceVolume(*this,volumeId,volume,error)||!conventions(volume,error))return false;
         segy_detail::Reader reader;if(!reader.open(volume.dataFile,error,cancel)||!checkSavedAxis(volume,reader,error))return false;
         SeismicTimeSliceResult output;const double factor=milliseconds(volume.sampling);
-        if(!timeSliceFromReader(reader,time*factor,options,output,error,cancel,true,volume.geometry.coordinateUnit=="ft"?9.84252:3.0))return false;
+        TimeSliceTileCallback converted;
+        if(tileReady)converted=[&](const SeismicTimeSliceTile& tile){auto value=tile;value.actualTime/=factor;value.timeUnit=volume.sampling.timeUnit;tileReady(value);};
+        if(!timeSliceFromReader(reader,time*factor,options,output,error,cancel,converted,true,volume.geometry.coordinateUnit=="ft"?9.84252:3.0))return false;
         output.actualTime/=factor;output.timeUnit=volume.sampling.timeUnit;result=std::move(output);return true;
     }catch(const std::exception& e){return reject(error,std::string("时间切片读取失败：")+e.what());}
 }

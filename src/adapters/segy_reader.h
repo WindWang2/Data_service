@@ -7,6 +7,19 @@
 namespace paleo::data::segy_detail {
 using Cancel = std::function<bool()>;
 
+struct BatchReadOptions {
+    std::string ioMode="auto"; // auto / buffered / mapped / legacy.
+    int bufferMiB=8;          // 每个读取器的有界读取/映射窗口，1–32 MiB。
+    bool collectTimings=false;
+};
+struct TraceWindowBatch {
+    std::vector<long long> traceIndexes;
+    std::vector<int> inlineNumbers,crosslineNumbers;
+    std::vector<double> x,y;
+    std::vector<float> amplitudes; // 输入道序优先：trace * sampleCount + sample。
+    int sampleCount=0;
+};
+
 class Reader {
 public:
     Reader();
@@ -19,7 +32,11 @@ public:
     const std::vector<int>& crosslines() const;
     long long traceIndex(int inlineNumber, int crosslineNumber) const;
     bool readTrace(long long traceIndex, int firstSample, int sampleCount,
-                   SeismicTraceResult& result, std::string& error, const Cancel& cancel = {});
+                   SeismicTraceResult& result, std::string& error, const Cancel& cancel = {},
+                   SeismicReadStatistics* statistics=nullptr, bool collectTimings=false);
+    bool readTraceBatch(const std::vector<long long>& ordinals, int firstSample, int sampleCount,
+                        const BatchReadOptions& options, TraceWindowBatch& result,
+                        SeismicReadStatistics& statistics, std::string& error, const Cancel& cancel = {});
     bool hasCoordinateMap() const;
     double maxCoordinateResidual() const;
     bool mapXY(double x, double y, double& il, double& xl) const;

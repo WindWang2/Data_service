@@ -5,7 +5,7 @@
 #include "paleo_data/service.h"
 
 class QComboBox; class QLineEdit; class QCheckBox; class QPushButton;
-class QLabel; class QPlainTextEdit; class QTabWidget; class QStackedWidget;
+class QLabel; class QPlainTextEdit; class QTabWidget; class QStackedWidget; class QSpinBox;
 class QTableWidget; class QThread; class CurvePlot; class ImagePreview; class SeismicTracePlot;
 
 // A runnable tutorial: the displayed C++ and the execution path use the same
@@ -35,6 +35,11 @@ private:
     QComboBox *example_=nullptr, *well_=nullptr, *resource_=nullptr;
     QLineEdit *first_=nullptr, *last_=nullptr;
     QCheckBox *processed_=nullptr, *fullResolution_=nullptr;
+    QWidget* sliceControls_=nullptr;
+    QLineEdit *inlineMin_=nullptr,*inlineMax_=nullptr,*crosslineMin_=nullptr,*crosslineMax_=nullptr;
+    QComboBox *sliceWorkers_=nullptr,*sliceIoMode_=nullptr;
+    QCheckBox *sliceCache_=nullptr,*sliceTimings_=nullptr;
+    QSpinBox* adjacentSamples_=nullptr;
     QPushButton *run_=nullptr, *cancel_=nullptr, *refresh_=nullptr;
     QLabel *summary_=nullptr, *firstLabel_=nullptr, *lastLabel_=nullptr, *resourceLabel_=nullptr, *wellLabel_=nullptr, *status_=nullptr;
     QPlainTextEdit *code_=nullptr, *json_=nullptr, *schema_=nullptr, *pathPoints_=nullptr;
@@ -47,6 +52,7 @@ private:
     QThread* worker_=nullptr;
     std::atomic_bool cancelRequested_{false};
     bool updating_=false, succeeded_=false;
+    unsigned long long runGeneration_=0;
     void reloadChoices();
     void reloadResources();
     void exampleChanged();

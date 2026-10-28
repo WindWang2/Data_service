@@ -78,10 +78,26 @@ int main(int argc,char** argv) {
         for(int y=0;y<wall.height();++y)for(int x=0;x<wall.width();++x){const auto pixel=wall.pixel(x,y);if(pixel==qRgb(0,0,255))++narrowBlue;if(pixel==qRgb(255,128,128))++widePink;}
         require(narrowBlue>100 && widePink>20*narrowBlue,"wall ignores nonuniform XY sample spacing");
 
+        // Tiles occupy their final grid positions; partial output is not exportable.
+        paleo::data::SeismicTimeSliceTile tile;tile.totalInlineCount=4;tile.totalCrosslineCount=4;
+        tile.inlineOffset=1;tile.crosslineOffset=2;tile.inlineCount=2;tile.crosslineCount=2;
+        tile.completedTiles=1;tile.totalTiles=4;tile.actualTime=228;tile.timeUnit="ms";
+        tile.amplitudes={1.f,-1.f,0.f,std::numeric_limits<float>::quiet_NaN()};
+        widget.clear();require(widget.applyTimeSliceTile(tile)&&widget.isPartial(),"valid progress tile rejected");
+        require(widget.nativeImageSize()==QSize(4,4),"tile preview uses tile size instead of full image");
+        require(widget.nativeImage().pixel(2,1)==qRgb(255,0,0)&&widget.nativeImage().pixel(3,1)==qRgb(0,0,255),"tile offsets or axes incorrect");
+        require(widget.nativeImage().pixel(0,0)==qRgb(225,225,225),"unread tile area not marked");
+        require(!widget.exportImage(sectionPath,error)&&!error.isEmpty(),"incomplete slice was exported");
+        tile.inlineOffset=0;tile.crosslineOffset=0;tile.inlineCount=1;tile.crosslineCount=1;tile.amplitudes={2.f};tile.completedTiles=2;
+        require(widget.applyTimeSliceTile(tile),"second progress tile rejected");
+        require(widget.nativeImage().pixel(2,1)==qRgb(255,0,0),"later tile recolored prior tile inconsistently");
+        tile.inlineOffset=4;require(!widget.applyTimeSliceTile(tile)&&widget.nativeImage().isNull()&&!widget.isPartial(),"invalid tile left a partial image");
+        tile.inlineOffset=0;require(widget.applyTimeSliceTile(tile),"partial preview did not recover");
+
         // Time slices keep both axes, with explicit row-major orientation.
         paleo::data::SeismicTimeSliceResult slice;slice.inlineNumbers.resize(1803);slice.crosslineNumbers.resize(1805);slice.timeUnit="ms";
         slice.amplitudes.assign(size_t(1803)*1805,0.f);slice.amplitudes[size_t(1802)*1805+1804]=-1.f;slice.amplitudes[1]=1.f;
-        widget.setTimeSlice(slice);require(widget.nativeImageSize()==QSize(1805,1803),"time slice was irreversibly decimated");
+        widget.setTimeSlice(slice);require(!widget.isPartial(),"complete result left export blocked");require(widget.exportImage(sectionPath,error),"completed slice not exportable");require(widget.nativeImageSize()==QSize(1805,1803),"time slice was irreversibly decimated");
         require(widget.nativeImage().pixel(1804,1802)==qRgb(0,0,255),"last native time-slice cell lost");
         require(widget.nativeImage().pixel(1,0)==qRgb(255,0,0),"time-slice row-major axes swapped");
         require(!widget.hasWallGeometry(),"slice retained stale section geometry");

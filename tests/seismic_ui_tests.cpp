@@ -1,5 +1,6 @@
 // Repository fixtures are generated synthetic examples; no private source data is bundled.
 #include "apidemo.h"
+#include "plotwidgets.h"
 #include "paleo_data/service.h"
 #include <QApplication>
 #include <QComboBox>
@@ -62,6 +63,25 @@ int main(int argc,char** argv){QApplication app(argc,argv);try{
 
     widget.setExample("seismic_slice");first->setText("228");last->setText("4");check(run(widget),"native slice failed without TWT");out=json(widget);check(out["method"].toString()=="readSeismicTimeSlice"&&out["actualTime"].toDouble()==228&&out["amplitudeCount"].toInt()==12,"native slice shape/time");check(out["preview"].toArray()[0].toObject()["amplitude"].toDouble()==0,"zero sample must remain valid");first->clear();last->clear();check(run(widget),"default midpoint slice failed");check(json(widget)["requestedTime"].toDouble()==228,"midpoint time differs from displayed code");
     check(out["nativeInlineCount"].toInt()==3&&out["nativeCrosslineCount"].toInt()==4&&!out["decimated"].toBool(),"native slice resolution metadata lost");hd->setChecked(false);last->setText("2");check(run(widget),"explicit preview slice failed");check(json(widget)["amplitudeCount"].toInt()==4&&json(widget)["decimated"].toBool(),"preview choice must return a visibly labelled sampled grid");hd->setChecked(true);last->setText("invalid disabled preview cap");check(run(widget)&&json(widget)["amplitudeCount"].toInt()==12,"HD must ignore disabled preview cap");
+
+    // Range inputs select actual numbered lines, and match the generated public API code.
+    auto* ilMin=control<QLineEdit>(widget,"apiInlineMin");auto* ilMax=control<QLineEdit>(widget,"apiInlineMax");
+    auto* xlMin=control<QLineEdit>(widget,"apiCrosslineMin");auto* xlMax=control<QLineEdit>(widget,"apiCrosslineMax");
+    auto* workers=control<QComboBox>(widget,"apiSliceWorkers");auto* io=control<QComboBox>(widget,"apiSliceIoMode");
+    auto* cache=control<QCheckBox>(widget,"apiSliceCache");auto* timings=control<QCheckBox>(widget,"apiSliceTimings");auto* preview=dynamic_cast<ImagePreview*>(control<QWidget>(widget,"apiSeismicPreview"));check(preview!=nullptr,"seismic preview has unexpected widget type");
+    check(ilMin->text().isEmpty()&&ilMax->text().isEmpty()&&xlMin->text().isEmpty()&&xlMax->text().isEmpty()&&workers->currentData().toInt()==2&&cache->isChecked(),"slice defaults unexpectedly restrict coverage");
+    first->setText("228");ilMin->setText("102");ilMax->setText("104");xlMin->setText("202");xlMax->setText("204");workers->setCurrentIndex(workers->findData(4));io->setCurrentIndex(io->findData("buffered"));cache->setChecked(false);timings->setChecked(true);
+    check(run(widget),"ROI slice failed");out=json(widget);check(out["amplitudeCount"].toInt()==4&&out["range"].toObject()["inlineMin"].toInt()==102,"ROI shape/range metadata mismatch");
+    const auto roi=out["preview"].toArray();check(roi.size()==4&&roi[0].toObject()["amplitude"].toDouble()==1100&&roi[1].toObject()["amplitude"].toDouble()==1200&&roi[2].toObject()["amplitude"].toDouble()==2100&&roi[3].toObject()["amplitude"].toDouble()==2200,"ROI did not retain native amplitudes/order");
+    check(out["timingsCollected"].toBool()&&out["readStatistics"].toObject()["totalTiles"].toInt()>0,"read diagnostics missing");check(widget.property("apiTilesDisplayed").toInt()>0&&!preview->isPartial()&&preview->nativeImageSize()==QSize(2,2),"progress callback or final replacement missing");
+    check(widget.generatedCode().contains("options.inlineMin = 102")&&widget.generatedCode().contains("options.crosslineMax = 204")&&widget.generatedCode().contains("options.workerCount = 4")&&widget.generatedCode().contains("options.useCache = false")&&widget.generatedCode().contains("options, result, error, {}, onTile"),"ROI generated example differs from execution");
+    ilMin->setText("105");check(!run(widget)&&preview->nativeImage().isNull(),"inverted ROI retained stale image");ilMin->setText("102");
+    DataService::clearSeismicSliceCache();cache->setChecked(true);check(run(widget),"cache population failed");first->setText("230");check(run(widget),"adjacent cached time failed");out=json(widget);check(out["readStatistics"].toObject()["cacheHits"].toInt()>0&&out["preview"].toArray()[0].toObject()["amplitude"].toDouble()==1101,"adjacent cache hit lost requested time");
+    check(!run(widget,true)&&preview->nativeImage().isNull(),"cancelled slice retained partial/full image");
+    // A programmatic parameter change during a request invalidates all queued tiles.
+    const auto changeWhileRunning=QObject::connect(&widget,&ApiDemoWidget::busyChanged,&widget,[&](bool busy){if(busy)first->setText("232");});
+    check(!run(widget)&&preview->nativeImage().isNull()&&widget.lastResultJson().isEmpty(),"stale request published a tile/result");QObject::disconnect(changeWhileRunning);
+    for(auto* edit:{ilMin,ilMax,xlMin,xlMax})edit->clear();workers->setCurrentIndex(workers->findData(2));io->setCurrentIndex(io->findData("auto"));timings->setChecked(false);
 
     // Ordered XY points form an actual bent wall; input geometry is not stored implicitly.
     widget.setExample("wall");check(widget.selectResource(id),"select wall volume");auto* coordinates=control<QPlainTextEdit>(widget,"apiWallCoordinates");coordinates->setPlainText("500000,4000000\n500150,4000000\n500150,4000200");

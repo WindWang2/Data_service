@@ -123,6 +123,16 @@ struct TimeSliceReadOptions {
     int maxInlineCount=512, maxCrosslineCount=512; // 预览时的轴上限。
     long long maxValues=262144;                // 可显式增至64000000；包含X/Y时总内存高于振幅数组。
     bool fullResolution=false;                // true 忽略预览轴上限，预算不足时报错，不静默降采样。
+    int inlineMin=std::numeric_limits<int>::min(), inlineMax=std::numeric_limits<int>::max();
+    int crosslineMin=std::numeric_limits<int>::min(), crosslineMax=std::numeric_limits<int>::max();
+    // 范围含端点，填写真实测线号；范围裁剪不属于降采样。
+    std::string ioMode="auto";                 // auto / buffered / mapped / legacy（基准对照）。
+    int workerCount=2;                         // 1、2或4，每个工作任务有独立只读句柄。
+    int tileSize=128;                          // 32–512，每块最多tileSize²点；规则体沿文件快轴分长条，不改变精度。
+    bool useCache=true;
+    int adjacentSamples=4;                    // 1–16个相邻时间样点共用一次读取。
+    int cacheBudgetMiB=512;                    // 进程内LRU缓存；0禁用，最大1024MiB，不写磁盘。
+    bool collectTimings=false;                // 基准测试时启用；避免日常逐道计时开销。
 };
 struct SeismicTimeSliceResult {
     std::vector<int> inlineNumbers,crosslineNumbers; // 实际测线号，不是数组下标。
@@ -132,7 +142,20 @@ struct SeismicTimeSliceResult {
     std::string timeUnit;
     int nativeInlineCount=0, nativeCrosslineCount=0;
     bool decimated=false;
+    SeismicReadStatistics statistics;
 };
+
+// 只报告已完整校验的分块。回调在发起服务调用的线程执行，不能直接操作GUI。
+// 最终方法失败/取消时完整result为空；已显示的临时分块应由界面清除。
+struct SeismicTimeSliceTile {
+    int inlineOffset=0, crosslineOffset=0, totalInlineCount=0, totalCrosslineCount=0;
+    int inlineCount=0, crosslineCount=0, completedTiles=0, totalTiles=0;
+    double actualTime=Missing;
+    std::string timeUnit;
+    std::vector<float> amplitudes;              // 此块行优先，仅包含当前时间面。
+    bool fromCache=false;
+};
+using TimeSliceTileCallback=std::function<void(const SeismicTimeSliceTile&)>;
 
 // 对外的 C++ 数据服务入口。调用者无需直接访问 SQLite 或文件解析器。
 // 统一用法：bool 表示调用是否成功；result 引用接收结果；失败时读取 error。
@@ -220,7 +243,8 @@ public:
     // 原生IL/XL网格切片：时间按文件道头ms解释，不要求已确认CRS/TWT。
     // 用于文件预览；跨井/层位联合分析仍须确认坐标、时间类型和参考面。
     bool readSeismicTimeSlice(long long volumeId, double timeMs, const TimeSliceReadOptions& options,
-                             SeismicTimeSliceResult& result, std::string& error, const CancelCheck& cancelled={});
+                             SeismicTimeSliceResult& result, std::string& error, const CancelCheck& cancelled={}, const TimeSliceTileCallback& tileReady={});
+    static void clearSeismicSliceCache();       // 清空进程内切片缓存，不改动来源文件。
     bool processSeismicTrace(const SeismicTraceResult& input, const SeismicProcessingOptions& options,
                             SeismicTraceResult& result, std::string& error, const CancelCheck& cancelled={}) const;
     bool processSeismicSection(const SeismicSectionResult& input, const SeismicProcessingOptions& options,
@@ -232,7 +256,7 @@ public:
     // fullResolution 时访问路径穿过的原生网格道；振幅取最近网格道，不插值、不复制地震体。
     // pathX/pathY/distances 描述墙体几何；x/y/traceIndexes 描述实际来源道；缺道保留NaN。
     bool extractSection(const SeismicSection& section, const SectionReadOptions& options, SeismicSectionResult& result, std::string& error, const CancelCheck& cancelled={});
-    bool readTimeSlice(long long volumeId, double time, const TimeSliceReadOptions& options, SeismicTimeSliceResult& result, std::string& error, const CancelCheck& cancelled={});
+    bool readTimeSlice(long long volumeId, double time, const TimeSliceReadOptions& options, SeismicTimeSliceResult& result, std::string& error, const CancelCheck& cancelled={}, const TimeSliceTileCallback& tileReady={});
     bool backupDatabase(const std::string& destination, std::string& error) const;
 private:
     struct Impl;

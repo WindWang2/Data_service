@@ -16,6 +16,7 @@ call :run text_parser_tests.exe
 call :run aux_parser_tests.exe
 call :run seismic_service_tests.exe
 call :run seismic_hd_tests.exe
+call :run timeslice_batch_tests.exe
 call :run api_demo_tests.exe
 call :run spreadsheet_xml_tests.exe
 call :run core_asset_tests.exe

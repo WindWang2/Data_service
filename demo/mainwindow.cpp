@@ -115,7 +115,7 @@ void MainWindow::setupUi(){
     modeTabs_=new QTabWidget(this);modeTabs_->setObjectName("modeTabs");apiDemo_=new ApiDemoWidget;apiDemo_->setObjectName("apiDemo");modeTabs_->addTab(apiDemo_,QStringLiteral("接口代码演示"));modeTabs_->addTab(main,QStringLiteral("资料管理"));setCentralWidget(modeTabs_);
     connect(apiDemo_,&ApiDemoWidget::busyChanged,this,[this](bool busy){for(auto* a:lockedActions_)a->setEnabled(!busy);modeTabs_->setTabEnabled(1,!busy);if(!busy&&closeWhenIdle_)close();});
     progress_=new QProgressBar;progress_->setMaximumWidth(260);progress_->setVisible(false);cancelButton_=new QPushButton(QStringLiteral("取消任务"));cancelButton_->setVisible(false);statusBar()->addPermanentWidget(progress_);statusBar()->addPermanentWidget(cancelButton_);
-    connect(cancelButton_,&QPushButton::clicked,this,[this]{cancelled_=true;cancelButton_->setEnabled(false);statusBar()->showMessage(QStringLiteral("正在取消，等待当前操作安全结束…"));});
+    connect(cancelButton_,&QPushButton::clicked,this,[this]{cancelled_=true;if(imagePreview_->isPartial())imagePreview_->clear();cancelButton_->setEnabled(false);statusBar()->showMessage(QStringLiteral("正在取消，等待当前操作安全结束…"));});
     connect(wellBox_,&QComboBox::currentIndexChanged,this,[this]{if(!refreshing_)refreshEntries();});connect(kindBox_,&QComboBox::currentIndexChanged,this,[this]{if(!refreshing_){refreshWellSelector(currentWellId());refreshEntries();}});
     connect(relevantWellsBox_,&QCheckBox::toggled,this,[this]{if(!refreshing_){refreshWellSelector(currentWellId());refreshEntries();}});
     connect(entryList_,&QListWidget::currentRowChanged,this,[this]{pageOffset_=0;if(!refreshing_){curvePlot_->clear();imagePreview_->clear();querySelected();}});

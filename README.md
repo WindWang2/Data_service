@@ -11,9 +11,10 @@
 - 每文件事务、重复检查、来源追溯、质量标记、人工修改、明确重导入、重开和数据库备份。
 - 基于 segyio 的有界文件检查、单道、INLINE/XLINE、时间切片和 XY 路径剖面；大地震体始终保持外部路径。
 - 原始分辨率的剖面/切片、多点坐标剖面墙、1:1 缩放和原尺寸 PNG 导出；详情见 [高清地震指南](docs/hd-seismic.md)。
+- 时间切片支持 IL/XL 范围、分块显示、相邻时间缓存和 1/2/4 线程；可比较旧通道、连续缓冲及 Windows 映射读取，见 [切片性能指南](docs/time-slice-performance.md)。
 - 对返回振幅执行去均值、固定增益、AGC、限幅和统计，原文件保持不变。
 - 目录导入支持 1～4 个准备线程，界面提供 1/2/4 选项，默认 2 个；数据库按原文件顺序发布。
-- 界面展示 C++ 调用代码、返回对象摘要与曲线/剖面图；提供十个可编译入门案例。
+- 界面展示 C++ 调用代码、返回对象摘要与曲线/剖面图；提供十一个可编译入门案例。
 
 ## 三层结构
 
@@ -42,7 +43,7 @@ Windows 也可在 MSVC x64 开发终端运行 `build.ps1`，通过 `-QtRoot`、`
 
 旧式 `.xls` 读取动态使用 FreeXL。维护的源码在 `vendor/freexl`，Windows 构建说明见其 `NOTICE.txt` 和构建脚本；运行时还需对应的 libiconv 库。`.xlsx` 使用本项目的 ZIP/XML 解析器。这里给出标准 CMake 构建方法，不宣称所有系统或工具链均已验证。
 
-当前源码已在 Windows x64 Release 环境独立构建：16 项合成回归测试通过，安装后的 SDK 可编译全部十个入门案例。验证过程不依赖随仓库发布的数据文件。
+当前源码已在 Windows x64 Release 环境独立构建：17 项合成回归测试通过，安装后的 SDK 可编译全部十一个入门案例。验证过程不依赖随仓库发布的数据文件。
 
 ## 不带真实资料的演示
 
@@ -90,7 +91,7 @@ if (service.readCurveSlice(curveId, paleo::data::Missing,
 
 - [接口与界面演示](docs/api-demo.md)
 - [怎样读懂一次 C++ 调用](docs/cpp-reading-guide.md)
-- [十个完整入门案例](examples/getting_started/README.md)
+- [十一个完整入门案例](examples/getting_started/README.md)
 - [SEG-Y 读取与基础处理](docs/segyio-guide.md)
 - [多线程与增量导入](docs/import-performance.md)
 - [便携运行与测试](docs/portable-testing.md)

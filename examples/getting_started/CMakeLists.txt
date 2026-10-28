@@ -18,7 +18,8 @@ foreach(example IN ITEMS
     07_export_curve_json
     08_edit_temporary_project
     09_segyio
-    10_hd_seismic)
+    10_hd_seismic
+    11_time_slice_region)
     add_executable(example_${example} ${example}/main.cpp)
     target_link_libraries(example_${example} PRIVATE
         Paleo::paleo_data_service Qt6::Core)

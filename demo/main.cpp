@@ -31,6 +31,14 @@ int main(int argc,char** argv){
     parser.addOption({"example-last",QStringLiteral("接口示例底深 / 结束时间；原生地震示例为样点数 / 最大道数 / 每轴位置数"),"number"});
     parser.addOption({"example-points",QStringLiteral("剖面墙有序坐标：X,Y;X,Y;X,Y，坐标约定必须与所选地震体一致"),"points"});
     parser.addOption({"preview",QStringLiteral("将地震示例切换为抽样预览；默认读取原始分辨率")});
+    parser.addOption({"slice-inline-min",QStringLiteral("切片 IL 起点，按实际测线号"),"number"});
+    parser.addOption({"slice-inline-max",QStringLiteral("切片 IL 终点"),"number"});
+    parser.addOption({"slice-crossline-min",QStringLiteral("切片 XL 起点"),"number"});
+    parser.addOption({"slice-crossline-max",QStringLiteral("切片 XL 终点"),"number"});
+    parser.addOption({"slice-workers",QStringLiteral("切片读取线程：1 / 2 / 4"),"number"});
+    parser.addOption({"slice-io",QStringLiteral("切片读取方式：auto / buffered / mapped / legacy"),"mode"});
+    parser.addOption({"no-slice-cache",QStringLiteral("禁用切片相邻时间缓存" )});
+    parser.addOption({"slice-timings",QStringLiteral("记录切片分阶段耗时" )});
     parser.addOption({"code-tab",QStringLiteral("接口左侧页签：0导包 / 1代码 / 2返回类型"),"index"});
     parser.addOption({"result-tab",QStringLiteral("接口右侧页签：0图形 / 1JSON"),"index"});
     parser.addOption({"export-code",QStringLiteral("保存当前可编译的 C++ 示例"),"cpp"});
@@ -47,6 +55,13 @@ int main(int argc,char** argv){
     if(parser.isSet("example-last"))window.apiDemo()->findChild<QLineEdit*>("apiLastValue")->setText(parser.value("example-last"));
     if(parser.isSet("example-points"))window.apiDemo()->findChild<QPlainTextEdit*>("apiWallCoordinates")->setPlainText(parser.value("example-points").replace(';','\n'));
     if(parser.isSet("preview"))window.apiDemo()->findChild<QCheckBox*>("apiFullResolution")->setChecked(false);
+    const char* rangeFlags[]={"slice-inline-min","slice-inline-max","slice-crossline-min","slice-crossline-max"};
+    const char* rangeControls[]={"apiInlineMin","apiInlineMax","apiCrosslineMin","apiCrosslineMax"};
+    for(int n=0;n<4;++n)if(parser.isSet(rangeFlags[n]))window.apiDemo()->findChild<QLineEdit*>(rangeControls[n])->setText(parser.value(rangeFlags[n]));
+    if(parser.isSet("slice-workers")){bool valid=false;int value=parser.value("slice-workers").toInt(&valid);auto* control=window.apiDemo()->findChild<QComboBox*>("apiSliceWorkers");int index=control->findData(value);if(!valid||index<0)return 4;control->setCurrentIndex(index);}
+    if(parser.isSet("slice-io")){auto* control=window.apiDemo()->findChild<QComboBox*>("apiSliceIoMode");int index=control->findData(parser.value("slice-io"));if(index<0)return 4;control->setCurrentIndex(index);}
+    if(parser.isSet("no-slice-cache"))window.apiDemo()->findChild<QCheckBox*>("apiSliceCache")->setChecked(false);
+    if(parser.isSet("slice-timings"))window.apiDemo()->findChild<QCheckBox*>("apiSliceTimings")->setChecked(true);
     auto saveText=[](const QString& path,const QString& value){QDir().mkpath(QFileInfo(path).absolutePath());QSaveFile file(path);const auto bytes=value.toUtf8();return file.open(QIODevice::WriteOnly)&&file.write(bytes)==bytes.size()&&file.commit();};
     if(parser.isSet("export-code")&&!saveText(parser.value("export-code"),window.apiDemo()->generatedCode()))return 6;
     if(parser.isSet("tutorial-case")){

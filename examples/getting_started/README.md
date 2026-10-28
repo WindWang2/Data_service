@@ -1,4 +1,4 @@
-# 十个 C++ 入门案例
+# 十一个 C++ 入门案例
 
 每个目录的 `main.cpp` 都是完整程序，只通过公开 `DataService` 获取或修改对象。测试数据不在仓库中；可先在仓库外通过 `create_api_demo_project` 生成合成工区，或使用自己已经导入的工区。
 
@@ -31,6 +31,8 @@ cmake --build build-examples --parallel 8
 | [09 SEG-Y](09_segyio/main.cpp) | `example_09_segyio <工区> [地震体编号]` | 检查布局，按需读取单道/剖面/切片，处理与统计 |
 
 | [10 高清地震](10_hd_seismic/main.cpp) | `example_10_hd_seismic <工区> <地震体编号> inline <IL号>`，或 `slice <时间ms>`，或 `wall <X1> <Y1> <X2> <Y2> [X3 Y3 ...]` | 原始分辨率读数、完整切片、多点墙几何；详见 [高清指南](../../docs/hd-seismic.md) |
+
+| [11 局部时间切片](11_time_slice_region/main.cpp) | `example_11_time_slice_region <工区> <地震体编号> <时间ms> <IL起点> <IL终点> <XL起点> <XL终点>` | 区域高清、分块回调、线程和相邻时间缓存 |
 
 前六个案例主要读取数据；07 写入调用方明确指定的新导出文件；08 的修改只发生在自动清理的临时工区；09 只读访问外部地震体。
 

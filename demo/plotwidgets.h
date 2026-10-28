@@ -24,6 +24,8 @@ public:
     void clear();
     void setSection(const paleo::data::SeismicSectionResult& section);
     void setTimeSlice(const paleo::data::SeismicTimeSliceResult& slice);
+    bool applyTimeSliceTile(const paleo::data::SeismicTimeSliceTile& tile);
+    bool isPartial() const { return partial_; }
     // 一个像素对应一个返回的振幅；不再把原始矩阵缩减到 1800 像素。
     QSize nativeImageSize() const { return image_.size(); }
     const QImage& nativeImage() const { return image_; }
@@ -55,6 +57,8 @@ private:
     QString caption_;
     bool sectionMode_ = false; // 道方向与时间方向单位不同，剖面填充绘图区而非按像素等比例缩小。
     bool fit_=true, wallMode_=false, dragging_=false;
+    bool partial_=false;
+    float partialScale_=1;
     double zoom_=1, wallAngle_=30;
     QPointF pan_, lastMouse_;
     std::vector<QPointF> wallPoints_;

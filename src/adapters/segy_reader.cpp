@@ -1,4 +1,5 @@
 #include "segy_reader.h"
+#include "segy_window_io.h"
 #include "Data/Sgy/SgyCoordinateMapper.h"
 #include "Data/Sgy/SgyIndex.h"
 #include "Data/Sgy/SgyRuleLayout.h"
@@ -11,14 +12,18 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <set>
 
 namespace paleo::data::segy_detail {
 namespace {
 constexpr int SmallIndexLimit = 100000;
 constexpr int ProbeLimit = 64;
+using Clock=std::chrono::steady_clock;
+double elapsedMs(Clock::time_point start){return std::chrono::duration<double,std::milli>(Clock::now()-start).count();}
 bool fail(std::string& error, const std::string& message) { error = message; return false; }
 bool cancelled(const Cancel& cancel, std::string& error) {
     return cancel && cancel() ? (error = "地震读取已取消", true) : false;
@@ -37,6 +42,55 @@ template<class T> float valueAt(const std::vector<unsigned char>& raw, int n) {
     return std::isfinite(converted) && std::abs(converted) <= std::numeric_limits<float>::max()
         ? static_cast<float>(value) : std::numeric_limits<float>::quiet_NaN();
 }
+bool supportedFormat(int format){return format==1||format==2||format==3||format==5||format==6||format==8||format==9||format==10||format==11||format==12||format==16;}
+bool convertSamples(int format,int count,std::vector<unsigned char>& raw,float* output,std::string& error,const Cancel& cancel){
+    if(!ok(segy_to_native(format,count,raw.data()),"segy_to_native",error))return false;
+    for(int n=0;n<count;++n){
+        if((n%4096)==0&&cancelled(cancel,error))return false;
+        switch(format){
+        case 1:case 5:output[n]=valueAt<float>(raw,n);break;
+        case 2:output[n]=valueAt<std::int32_t>(raw,n);break;
+        case 3:output[n]=valueAt<std::int16_t>(raw,n);break;
+        case 6:output[n]=valueAt<double>(raw,n);break;
+        case 8:output[n]=valueAt<std::int8_t>(raw,n);break;
+        case 9:output[n]=valueAt<std::int64_t>(raw,n);break;
+        case 10:output[n]=valueAt<std::uint32_t>(raw,n);break;
+        case 11:output[n]=valueAt<std::uint16_t>(raw,n);break;
+        case 12:output[n]=valueAt<std::uint64_t>(raw,n);break;
+        case 16:output[n]=valueAt<std::uint8_t>(raw,n);break;
+        default:return fail(error,"不支持的SEG-Y振幅格式");
+        }
+    }
+    return true;
+}
+// Instrument the existing segyio seek/read operations without changing their behavior.
+// The hook is thread-local, and every reader still owns its own datasource/FILE cursor.
+struct ProfileHook;
+thread_local ProfileHook* activeProfile=nullptr;
+struct ProfileHook {
+    segy_datasource* file;
+    SeismicReadStatistics* stats;
+    bool timings;
+    decltype(segy_datasource::read) originalRead;
+    decltype(segy_datasource::seek) originalSeek;
+    ProfileHook* previous;
+    ProfileHook(segy_datasource* source,SeismicReadStatistics* output,bool enabled)
+        :file(source),stats(output),timings(enabled),originalRead(source->read),originalSeek(source->seek),previous(activeProfile){
+        if(stats){activeProfile=this;file->read=read;file->seek=seek;}
+    }
+    ~ProfileHook(){if(stats){file->read=originalRead;file->seek=originalSeek;activeProfile=previous;}}
+    static int read(segy_datasource* source,void* buffer,size_t size){
+        auto& profile=*activeProfile;const auto start=profile.timings?Clock::now():Clock::time_point{};
+        const int status=profile.originalRead(source,buffer,size);++profile.stats->readCalls;
+        if(status==0)profile.stats->bytesRead+=static_cast<long long>(size);
+        if(profile.timings)profile.stats->readMs+=elapsedMs(start);return status;
+    }
+    static int seek(segy_datasource* source,long long offset,int whence){
+        auto& profile=*activeProfile;const auto start=profile.timings?Clock::now():Clock::time_point{};
+        const int status=profile.originalSeek(source,offset,whence);++profile.stats->seekCalls;
+        if(profile.timings)profile.stats->positionMs+=elapsedMs(start);return status;
+    }
+};
 int axisStep(const std::vector<int>& axis) {
     if (axis.size() < 2) return 0;
     const long long step = static_cast<long long>(axis[1]) - axis[0];
@@ -69,6 +123,9 @@ struct Reader::Impl {
     std::vector<int> ilValues, xlValues;
     seismic::SgyIndex coordinateIndex;
     seismic::SgyCoordinateMapper mapper;
+    std::unique_ptr<WindowAccess> batchIo;
+    std::string batchMode;
+    int batchWindowMiB=0;
     ~Impl() { if (file) segy_close(file); }
 
     bool header(int trace, Header& out, std::string& error, const Cancel& cancel) {
@@ -86,6 +143,23 @@ struct Reader::Impl {
         if (std::abs(delay(h)-delayMs) > 1e-8)
             return fail(error,"所选地震道延迟时间与文件共同采样轴不一致");
         return true;
+    }
+    bool validate(long long ordinal,const Header& h,std::string& error)const{
+        if(!sampling(h,error))return false;
+        const auto [il,xl]=key(h);
+        if(rule.valid){int expectedIl=0,expectedXl=0;
+            if(!expectedKey(rule,static_cast<int>(ordinal),expectedIl,expectedXl)||il!=expectedIl||xl!=expectedXl)
+                return fail(error,"实际道头不符合抽样规则网格；已停止读取，需建立明确索引，不能显示错位振幅");}
+        if(geometryKnown&&!rule.valid){const auto it=locations.find({il,xl});
+            if(it==locations.end()||it->second!=ordinal)return fail(error,"道头与已建立索引不一致");}
+        return true;
+    }
+    void normalizeRawHeader(Header& h)const{
+        if(file->metadata.endianness!=SEGY_LSB)return;
+        // The public segyio header reader normalizes these fields to big-endian.
+        // Batch reads apply the same normalization only to fields consumed below.
+        for(int at:{4,8,20,72,76,180,184,188,192})qToBigEndian(qFromLittleEndian<quint32>(h.data()+at),h.data()+at);
+        for(int at:{70,88,108,114,116,214})qToBigEndian(qFromLittleEndian<quint16>(h.data()+at),h.data()+at);
     }
     void coordinates(const Header& h, double& x, double& y) const {
         x = y = Missing;
@@ -283,42 +357,111 @@ long long Reader::traceIndex(int il,int xl) const {
         if(i<0||i>=r.inlineCount||j<0||j>=r.xlineCount)return -1;return r.inlineMajor?i*r.xlineCount+j:j*r.inlineCount+i;}
     const auto it=impl_->locations.find({il,xl});return it==impl_->locations.end()?-1:it->second;
 }
-bool Reader::readTrace(long long ordinal,int first,int count,SeismicTraceResult& result,std::string& error,const Cancel& cancel) {
+bool Reader::readTrace(long long ordinal,int first,int count,SeismicTraceResult& result,std::string& error,const Cancel& cancel,
+                       SeismicReadStatistics* statistics,bool collectTimings) {
     result={};error.clear();auto& p=*impl_;
     if(cancelled(cancel,error))return false;
     if(!p.file||ordinal<0||ordinal>=p.facts.traceCount||first<0||count<1||first>=p.facts.sampleCount||count>p.facts.sampleCount-first||count>8000000)
         return fail(error,"地震道序号或采样范围无效/超过8000000样点预算");
-    Header h{};if(!p.header(static_cast<int>(ordinal),h,error,cancel)||!p.sampling(h,error))return false;
+    ProfileHook profile(p.file,statistics,collectTimings);
+    const bool profileTime=statistics&&collectTimings;
+    auto operationStart=profileTime?Clock::now():Clock::time_point{};
+    double ioBefore=profileTime?statistics->positionMs+statistics->readMs:0;
+    Header h{};if(!p.header(static_cast<int>(ordinal),h,error,cancel))return false;
+    // segyio normalizes header byte order outside its seek/read callbacks.
+    if(profileTime)statistics->validationMs+=std::max(0.0,elapsedMs(operationStart)-(statistics->positionMs+statistics->readMs-ioBefore));
+    auto started=statistics&&collectTimings?Clock::now():Clock::time_point{};
+    if(!p.validate(ordinal,h,error))return false;
     const auto [il,xl]=p.key(h);
-    if(p.rule.valid) {int expectedIl=0,expectedXl=0;if(!expectedKey(p.rule,static_cast<int>(ordinal),expectedIl,expectedXl)||il!=expectedIl||xl!=expectedXl)
-        return fail(error,"实际道头不符合抽样规则网格；已停止读取，需建立明确索引，不能显示错位振幅");}
-    if(p.geometryKnown&&!p.rule.valid) {const auto it=p.locations.find({il,xl});if(it==p.locations.end()||it->second!=ordinal)return fail(error,"道头与已建立索引不一致");}
     const int format=p.facts.sampleFormat;
-    if(format!=1&&format!=2&&format!=3&&format!=5&&format!=6&&format!=8&&format!=9&&format!=10&&format!=11&&format!=12&&format!=16)
-        return fail(error,"当前振幅读取暂不支持 SEG-Y 样点格式码 "+std::to_string(format));
+    if(!supportedFormat(format))return fail(error,"当前振幅读取暂不支持 SEG-Y 样点格式码 "+std::to_string(format));
+    if(statistics&&collectTimings)statistics->validationMs+=elapsedMs(started);
     std::vector<unsigned char> raw(size_t(count)*p.file->metadata.elemsize);
-    if(!ok(segy_readsubtr(p.file,static_cast<int>(ordinal),first,first+count,1,raw.data(),nullptr),"segy_readsubtr",error)||
-       !ok(segy_to_native(format,count,raw.data()),"segy_to_native",error))return false;
-    SeismicTraceResult output;output.traceIndex=ordinal;output.traceNumber=i32(h,4); // 原字段5–8，0也保留，不改用其他道号。
+    operationStart=profileTime?Clock::now():Clock::time_point{};
+    ioBefore=profileTime?statistics->positionMs+statistics->readMs:0;
+    if(!ok(segy_readsubtr(p.file,static_cast<int>(ordinal),first,first+count,1,raw.data(),nullptr),"segy_readsubtr",error))return false;
+    // The residual includes segyio's sample-offset arithmetic and LE→BE swap.
+    if(profileTime)statistics->conversionMs+=std::max(0.0,elapsedMs(operationStart)-(statistics->positionMs+statistics->readMs-ioBefore));
+    SeismicTraceResult output;output.traceIndex=ordinal;output.traceNumber=i32(h,4);
     output.inlineNumber=il;output.crosslineNumber=xl;p.coordinates(h,output.x,output.y);
     output.firstTime=p.delayMs+first*p.facts.sampleInterval;output.sampleInterval=p.facts.sampleInterval;output.timeUnit="ms";
     output.amplitudes.resize(count);
-    for(int n=0;n<count;++n) {
-        if((n%4096)==0&&cancelled(cancel,error))return false;
-        switch(format) {
-        case 1: case 5: output.amplitudes[n]=valueAt<float>(raw,n);break;
-        case 2: output.amplitudes[n]=valueAt<std::int32_t>(raw,n);break;
-        case 3: output.amplitudes[n]=valueAt<std::int16_t>(raw,n);break;
-        case 6: output.amplitudes[n]=valueAt<double>(raw,n);break;
-        case 8: output.amplitudes[n]=valueAt<std::int8_t>(raw,n);break;
-        case 9: output.amplitudes[n]=valueAt<std::int64_t>(raw,n);break;
-        case 10: output.amplitudes[n]=valueAt<std::uint32_t>(raw,n);break;
-        case 11: output.amplitudes[n]=valueAt<std::uint16_t>(raw,n);break;
-        case 12: output.amplitudes[n]=valueAt<std::uint64_t>(raw,n);break;
-        case 16: output.amplitudes[n]=valueAt<std::uint8_t>(raw,n);break;
+    started=statistics&&collectTimings?Clock::now():Clock::time_point{};
+    if(!convertSamples(format,count,raw,output.amplitudes.data(),error,cancel))return false;
+    if(statistics){if(collectTimings)statistics->conversionMs+=elapsedMs(started);++statistics->tracesRead;}
+    if(cancelled(cancel,error))return false;result=std::move(output);return true;
+}
+
+bool Reader::readTraceBatch(const std::vector<long long>& ordinals,int first,int count,const BatchReadOptions& options,
+                            TraceWindowBatch& result,SeismicReadStatistics& statistics,std::string& error,const Cancel& cancel){
+    result={};statistics={};error.clear();const auto overall=Clock::now();auto& p=*impl_;
+    if(cancelled(cancel,error))return false;
+    if(!p.file||first<0||count<1||first>=p.facts.sampleCount||count>p.facts.sampleCount-first||count>8000000||
+       ordinals.size()>1000000||ordinals.size()>64000000ULL/static_cast<unsigned>(count)||options.bufferMiB<1||options.bufferMiB>32)
+        return fail(error,"批量道范围无效，或超过100万道/6400万振幅/1–32 MiB窗口预算");
+    if(options.ioMode!="legacy"&&options.ioMode!="auto"&&options.ioMode!="buffered"&&options.ioMode!="mapped")
+        return fail(error,"批量模式应为auto、buffered、mapped或legacy");
+    if(!supportedFormat(p.facts.sampleFormat))return fail(error,"当前批量读取暂不支持SEG-Y格式码 "+std::to_string(p.facts.sampleFormat));
+    for(auto ordinal:ordinals)if(ordinal<0||ordinal>=p.facts.traceCount)return fail(error,"批量请求包含无效物理道序号");
+    TraceWindowBatch output;output.sampleCount=count;output.traceIndexes=ordinals;
+    output.inlineNumbers.resize(ordinals.size());output.crosslineNumbers.resize(ordinals.size());
+    output.x.resize(ordinals.size());output.y.resize(ordinals.size());output.amplitudes.resize(ordinals.size()*size_t(count));
+    statistics.ioMode=options.ioMode;
+    if(options.ioMode=="legacy"){
+        for(size_t at=0;at<ordinals.size();++at){
+            SeismicTraceResult trace;
+            if(!readTrace(ordinals[at],first,count,trace,error,cancel,&statistics,options.collectTimings))return false;
+            output.inlineNumbers[at]=trace.inlineNumber;output.crosslineNumbers[at]=trace.crosslineNumber;
+            output.x[at]=trace.x;output.y[at]=trace.y;
+            std::copy(trace.amplitudes.begin(),trace.amplitudes.end(),output.amplitudes.begin()+at*size_t(count));
+        }
+    }else if(!ordinals.empty()){
+        auto started=options.collectTimings?Clock::now():Clock::time_point{};
+        if(!p.batchIo||p.batchMode!=options.ioMode||p.batchWindowMiB!=options.bufferMiB){
+            p.batchIo=std::make_unique<WindowAccess>();
+            if(!p.batchIo->open(QString::fromUtf8(p.facts.sourceFile),p.facts.fileBytes,options.ioMode,options.bufferMiB,error)){
+                p.batchIo.reset();return false;
+            }
+            p.batchMode=options.ioMode;p.batchWindowMiB=options.bufferMiB;
+        }
+        statistics.ioMode=p.batchIo->mode();
+        std::vector<size_t> order(ordinals.size());std::iota(order.begin(),order.end(),0);
+        std::stable_sort(order.begin(),order.end(),[&](size_t a,size_t b){return ordinals[a]<ordinals[b];});
+        const auto recordBytes=240LL+static_cast<long long>(p.file->metadata.trace_bsize);
+        const auto sampleBytes=static_cast<long long>(count)*p.file->metadata.elemsize;
+        const auto sampleOffset=240LL+static_cast<long long>(first)*p.file->metadata.elemsize;
+        const auto requestEnd=p.facts.firstTraceOffset+ordinals[order.back()]*recordBytes+sampleOffset+sampleBytes;
+        if(requestEnd>p.facts.fileBytes)return fail(error,"批量样点位置越过文件边界");
+        if(options.collectTimings)statistics.positionMs+=elapsedMs(started);
+        std::vector<unsigned char> raw(static_cast<size_t>(sampleBytes));
+        for(size_t at:order){
+            if(cancelled(cancel,error))return false;
+            started=options.collectTimings?Clock::now():Clock::time_point{};
+            const auto ordinal=ordinals[at];
+            const auto offset=p.facts.firstTraceOffset+ordinal*recordBytes;
+            if(options.collectTimings)statistics.positionMs+=elapsedMs(started);
+            Header h{};
+            if(!p.batchIo->read(offset,h.data(),h.size(),requestEnd,statistics,options.collectTimings,error))return false;
+            started=options.collectTimings?Clock::now():Clock::time_point{};
+            p.normalizeRawHeader(h);++p.facts.checkedHeaders;
+            if(!p.validate(ordinal,h,error))return false;
+            const auto [il,xl]=p.key(h);output.inlineNumbers[at]=il;output.crosslineNumbers[at]=xl;
+            p.coordinates(h,output.x[at],output.y[at]);
+            if(options.collectTimings)statistics.validationMs+=elapsedMs(started);
+            if(!p.batchIo->read(offset+sampleOffset,raw.data(),raw.size(),requestEnd,statistics,options.collectTimings,error))return false;
+            started=options.collectTimings?Clock::now():Clock::time_point{};
+            // segy_to_native expects the same canonical big-endian buffer as segy_readsubtr returns.
+            if(p.file->metadata.endianness==SEGY_LSB&&p.file->metadata.elemsize>1){
+                const auto width=static_cast<size_t>(p.file->metadata.elemsize);
+                for(size_t sample=0;sample<raw.size();sample+=width)std::reverse(raw.begin()+sample,raw.begin()+sample+width);
+            }
+            if(!convertSamples(p.facts.sampleFormat,count,raw,output.amplitudes.data()+at*size_t(count),error,cancel))return false;
+            if(options.collectTimings)statistics.conversionMs+=elapsedMs(started);
+            ++statistics.tracesRead;
         }
     }
-    if(cancelled(cancel,error))return false;result=std::move(output);return true;
+    if(cancelled(cancel,error))return false;
+    statistics.elapsedMs=elapsedMs(overall);result=std::move(output);return true;
 }
 bool Reader::hasCoordinateMap() const {return impl_->mapper.valid();}
 double Reader::maxCoordinateResidual() const {return impl_->mapper.fit().maxResidual;}

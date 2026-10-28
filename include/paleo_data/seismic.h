@@ -3,6 +3,15 @@
 
 namespace paleo::data {
 
+// 读取诊断：阶段耗时为工作线程累计值，可能大于墙钟 elapsedMs。
+// 映射字节数是视图大小累计值，不是磁盘实际读取量；系统缓存状态另行注明。
+struct SeismicReadStatistics {
+    double elapsedMs=0, positionMs=0, readMs=0, validationMs=0, conversionMs=0;
+    long long readCalls=0, seekCalls=0, bytesRead=0, mappedBytes=0, tracesRead=0;
+    int workerCount=1, cacheHits=0, cacheMisses=0, completedTiles=0, totalTiles=0;
+    std::string ioMode;
+};
+
 // SEG-Y 文件自身提供的事实。快速检查只读取文件头和少量道头，不读取整个体。
 // geometryStatus 明确区分抽样规则网格与完整索引，不能把抽样检查称为全文件校验。
 struct SeismicFileInfo {

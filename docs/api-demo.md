@@ -45,4 +45,6 @@
 
 对于照片、地图和外部地震体，路径应始终可访问。文件移动后使用“重新定位来源”，不能只修改显示名称来替换文件。
 
-更多完整程序见 [十个 C++ 案例](../examples/getting_started/README.md)，大目录导入设置见 [导入加速说明](import-performance.md)。
+更多完整程序见 [十一个 C++ 案例](../examples/getting_started/README.md)，大目录导入设置见 [导入加速说明](import-performance.md)。
+
+时间切片新增 IL/XL 范围、读取方式、1/2/4 线程、缓存和阶段计时。执行时逐块显示；中途结果标为临时预览，完成后统一色标并允许导出。取消或改变参数会清掉旧结果，详见 [切片性能指南](time-slice-performance.md)。

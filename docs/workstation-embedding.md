@@ -60,3 +60,19 @@ Close the writer before hashing/publishing its SQLite file, then use read-only
 sessions on consuming threads. A host using immutable versions should create a
 new prepared model for edits and reimports, rather than mutate a published model
 or ask the ordinary parser to reconstruct its host-specific interpretation.
+
+
+### 工区级模型接入
+
+宿主新建工程调用 createProject，随后直接调用 importDirectory 读取资料总目录。
+ImportOptions.excludedDirectories 在遍历前剪掉宿主输出与暂存目录；不以事后过滤
+替代，避免大目录扫描与生成文件回流。snapshotDatabase(destination) 使用 SQLite
+VACUUM INTO 创建包含已提交 WAL 的一致数据库副本；目标必须不存在。此 API 只复制
+数据库，外部来源引用保持原义，宿主使用 copySources=false 的绝对来源路径。
+宿主在暂存副本上增量导入，保留未变来源的人工修改，取消后丢弃整个副本。
+
+
+宿主可设置 ParseOptions.comprehensiveWellMetreDepth，声明已确认的综合井导出约定。
+只有“测井曲线／离散曲线”工作表且首四列严格为“井号、深度、TVD、TVDSS”时
+使用 MD／米；其他表格的深度类型及单位继续保持未知。默认关闭此宿主约定，
+不改变独立服务对普通 SpreadsheetML 的保守解析；显式 depthUnit 优先。

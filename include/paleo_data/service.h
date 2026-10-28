@@ -86,6 +86,7 @@ struct ImportOptions {
     // >=32MiB的表格等可展开资料单独准备；仅登记的照片/归档文件仍可并行校验。
     // 入库始终按文件顺序执行。
     long long maxPendingBytes=256LL*1024*1024;
+    std::vector<std::string> excludedDirectories; // Explicit output/staging trees pruned before directory traversal.
 };
 struct ImportProgress { int completed=0, total=0; std::string file, status; };
 struct ImportReport {
@@ -176,6 +177,9 @@ public:
     // instance is required for each worker thread, as for writable sessions.
     bool openProjectReadOnly(const std::string& directory, std::string& error);
     bool isReadOnly() const;
+    // Consistent SQLite snapshot including committed WAL; destination must not exist.
+    // Copies the database only; external source references retain their meaning.
+    bool snapshotDatabase(const std::string& destination, std::string& error) const;
     void closeProject();
     std::string projectPath() const;
     std::string projectName() const;

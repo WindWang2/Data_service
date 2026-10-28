@@ -272,12 +272,17 @@ bool DataService::importDirectory(const std::string& directory,const ImportOptio
     // Walk one directory at a time so we can prune the project's copied sources entirely.
     // The old recursive iterator entered the whole project before discarding its files.
     QStringList files,pending{input.absolutePath()};const auto own=QDir::fromNativeSeparators(QDir(impl_->store.root).absolutePath());
+    QStringList excluded;
+    for(const auto& path:options.excludedDirectories)excluded<<QDir::fromNativeSeparators(QDir(q(path)).absolutePath());
     if(progress)progress({0,0,s(input.absolutePath()),"扫描目录"});
     int enumerated=0;
     while(!pending.isEmpty()){
         if(cancelled&&cancelled()){report.cancelled=true;break;}
         const auto folder=QDir::fromNativeSeparators(pending.takeLast());
         if(folder.compare(own,Qt::CaseInsensitive)==0||folder.startsWith(own+"/",Qt::CaseInsensitive))continue;
+        bool pruned=false;
+        for(const auto& path:excluded)if(folder.compare(path,Qt::CaseInsensitive)==0||folder.startsWith(path+"/",Qt::CaseInsensitive)){pruned=true;break;}
+        if(pruned)continue;
         QDirIterator it(folder,QDir::Files|QDir::Dirs|QDir::Hidden|QDir::NoDotAndDotDot,QDirIterator::NoIteratorFlags);
         while(it.hasNext()){
             if(cancelled&&cancelled()){report.cancelled=true;break;}

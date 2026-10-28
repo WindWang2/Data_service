@@ -20,6 +20,7 @@ struct ParseOptions {
     // 服务重导入副本时自动填写原始身份路径，仅供井名/目录语义和相对附件定位。
     // 文件内容仍从 parseFile(path, ...) 的 path 读取；普通调用者可留空。
     std::string sourceContextPath;
+    bool comprehensiveWellMetreDepth=false; // Host-confirmed exporter contract; generic tables remain unknown.
 };
 struct ParseIssue {
     std::string code, message, sheet, originalText;

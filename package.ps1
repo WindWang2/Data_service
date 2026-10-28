@@ -35,7 +35,7 @@ if($DependencyRoot){$searchDirs+=(Join-Path $DependencyRoot 'bin')}
 $systemRoot=[IO.Path]::GetFullPath($env:WINDIR).TrimEnd('\')
 $searchDirs+=($env:PATH -split ';' | Where-Object {$_ -and (Test-Path -LiteralPath $_ -PathType Container) -and -not ([IO.Path]::GetFullPath($_).TrimEnd('\').StartsWith($systemRoot,[StringComparison]::OrdinalIgnoreCase))})
 $env:PATH=($searchDirs -join ';')+';'+$env:PATH
-foreach($name in @('paleo_data_demo.exe','paleo_data_cli.exe','facies_feature_example.exe','service_tests.exe','aux_parser_tests.exe','text_parser_tests.exe','seismic_service_tests.exe','create_api_demo_project.exe','api_demo_tests.exe','spreadsheet_xml_tests.exe','core_asset_tests.exe','format_compatibility_tests.exe','image_preview_tests.exe','segyio_access_tests.exe','seismic_processing_tests.exe','seismic_ui_tests.exe','segyio_bounds_tests.exe','segyio_acceptance.exe','import_performance_tests.exe','file_digest_tests.exe')){
+foreach($name in @('paleo_data_demo.exe','paleo_data_cli.exe','facies_feature_example.exe','service_tests.exe','aux_parser_tests.exe','text_parser_tests.exe','seismic_service_tests.exe','seismic_hd_tests.exe','create_api_demo_project.exe','api_demo_tests.exe','spreadsheet_xml_tests.exe','core_asset_tests.exe','format_compatibility_tests.exe','image_preview_tests.exe','segyio_access_tests.exe','seismic_processing_tests.exe','seismic_ui_tests.exe','segyio_bounds_tests.exe','segyio_acceptance.exe','import_performance_tests.exe','file_digest_tests.exe')){
     $file=Join-Path $binaryDirectory $name
     if(Test-Path -LiteralPath $file){Copy-Item -LiteralPath $file -Destination $OutputDirectory}
 }
@@ -50,6 +50,38 @@ if(Test-Path -LiteralPath $offscreen){Copy-Item -LiteralPath $offscreen -Destina
 $freexl=Join-Path $binaryDirectory 'freexl.dll'
 if(-not (Test-Path -LiteralPath $freexl)){throw 'Build the maintained FreeXL runtime first (build.ps1 includes it by default on Windows).'}
 Copy-Item -LiteralPath $freexl -Destination $OutputDirectory
+# Qt's Windows ICU build imports the OS's unsuffixed ICU API. A standalone ICU
+# distribution on PATH can use the same icuuc.dll filename but only export names
+# such as ucnv_open_78. Copying it beside the EXE shadows System32 and prevents
+# startup (0xc0000139). Keep Windows ICU in System32, and verify each consumer;
+# reject a plugin needing another ICU ABI instead of silently mixing the two.
+function Assert-WindowsIcuImports([string]$Binary,[string]$Dll,[string]$SystemDll){
+    if(-not (Test-Path -LiteralPath $SystemDll)){
+        throw "Windows ICU dependency is unavailable: $Dll. This Qt runtime requires Windows with the system ICU API."
+    }
+    $symbols=[System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $exportLines=& $Dumpbin /nologo /exports $SystemDll
+    if($LASTEXITCODE -ne 0){throw "Cannot inspect Windows ICU exports: $SystemDll"}
+    foreach($entry in $exportLines){
+        # Include forwarders (System32/icuuc.dll forwards its exports to icu.dll).
+        if($entry -match '^\s+\d+\s+[0-9A-F]+\s+(?:[0-9A-F]+\s+)?(\S+)'){
+            [void]$symbols.Add($Matches[1])
+        }
+    }
+    $importLines=& $Dumpbin /nologo /imports $Binary
+    if($LASTEXITCODE -ne 0){throw "Cannot inspect ICU imports: $Binary"}
+    $selected=$false
+    foreach($entry in $importLines){
+        if($entry -match '^    (\S+\.dll)\s*$'){$selected=$Matches[1] -ieq $Dll}
+        elseif($entry -match '^  Summary'){$selected=$false}
+        elseif($selected -and $entry -match '^\s{8,}[0-9A-F]+\s+(\S+)\s*$'){
+            $symbol=$Matches[1]
+            if(-not $symbols.Contains($symbol)){
+                throw "Incompatible ICU dependency: $Binary imports $Dll!$symbol, which Windows ICU does not export. Use libraries built for the same ICU ABI; do not bundle a same-name DLL over Windows ICU."
+            }
+        }
+    }
+}
 # Inspect each PE import, copying required non-system dependencies from explicit roots/PATH.
 $queue=[System.Collections.Generic.Queue[string]]::new()
 Get-ChildItem -LiteralPath $OutputDirectory -File -Recurse | Where-Object { $_.Extension -in @('.dll','.exe') } | ForEach-Object {$queue.Enqueue($_.FullName)}
@@ -61,6 +93,13 @@ while($queue.Count){
     foreach($line in $imports){
         if($line -notmatch '^\s+([A-Za-z0-9_.-]+\.dll)\s*$'){continue}
         $dll=$Matches[1];$located=$null
+        if($dll.ToLowerInvariant() -in @('icu.dll','icuuc.dll','icuin.dll')){
+            Assert-WindowsIcuImports -Binary $binary -Dll $dll -SystemDll (Join-Path $env:WINDIR ('System32/'+$dll))
+            if(Test-Path -LiteralPath (Join-Path $OutputDirectory $dll)){
+                throw "The deployment step bundled $dll, which would shadow Windows ICU. Use the system-ICU Qt build without a local replacement."
+            }
+            continue
+        }
         foreach($dir in $searchDirs){$candidate=Join-Path $dir $dll;if(Test-Path -LiteralPath $candidate){$located=$candidate;break}}
         if($located){
             $target=Join-Path $OutputDirectory $dll
@@ -74,7 +113,7 @@ while($queue.Count){
 @('[Paths]','Prefix=.','Plugins=.','Translations=translations') | Set-Content -LiteralPath (Join-Path $OutputDirectory 'qt.conf') -Encoding utf8
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $OutputDirectory '使用说明.md')
 $docsOutput=Join-Path $OutputDirectory 'docs';New-Item -ItemType Directory -Path $docsOutput | Out-Null
-foreach($document in @('api-demo.md','cpp-reading-guide.md','segyio-guide.md','import-performance.md','portable-testing.md')){
+foreach($document in @('api-demo.md','cpp-reading-guide.md','segyio-guide.md','hd-seismic.md','import-performance.md','portable-testing.md')){
     $file=Join-Path $PSScriptRoot ('docs/'+$document)
     if(Test-Path -LiteralPath $file){Copy-Item -LiteralPath $file -Destination $docsOutput}
 }

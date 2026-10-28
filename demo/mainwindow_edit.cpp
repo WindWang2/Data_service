@@ -107,4 +107,32 @@ void MainWindow::editMap(){if(!ready()||!requireIdle())return;const auto* e=curr
 
 void MainWindow::editSection(bool create){if(!ready()||!requireIdle())return;long long id=0;SeismicSection value;std::string error;if(!create){const auto* e=currentEntry();if(!e||currentKind()!="sections"){showError("请先选择一条二维剖面。");return;}id=e->id;if(!service_.readSection(id,value,error)){showError(error);return;}}std::vector<DataEntry> volumes;if(!service_.listData("volumes",0,volumes,error)){showError(error);return;}QDialog d(this);d.setWindowTitle(create?QStringLiteral("新建二维剖面路径"):QStringLiteral("编辑二维剖面路径"));d.resize(600,570);auto* layout=new QVBoxLayout(&d);auto* form=new QFormLayout;layout->addLayout(form);auto* name=edit(form,QStringLiteral("剖面名称"),value.sectionName);auto* volume=new QComboBox;volume->addItem(QStringLiteral("待关联地震体"),QVariant::fromValue<qlonglong>(0));for(const auto& v:volumes)volume->addItem(q(v.name),QVariant::fromValue<qlonglong>(v.id));int index=volume->findData(QVariant::fromValue<qlonglong>(value.parentVolumeId));volume->setCurrentIndex(index>=0?index:0);form->addRow(QStringLiteral("所属地震体"),volume);auto* crs=edit(form,QStringLiteral("路径坐标系"),value.coordinateSystem);auto* unit=edit(form,QStringLiteral("路径坐标单位"),value.coordinateUnit);layout->addWidget(new QLabel(QStringLiteral("按起点到终点的顺序，每行填写 X, Y。两点为直线，多点为折线。")));auto* points=new QPlainTextEdit;QStringList lines;for(const auto& p:value.pathPoints)lines<<QString::number(p.x,'g',16)+", "+QString::number(p.y,'g',16);points->setPlainText(lines.join('\n'));points->setPlaceholderText("1000, 2000\n1100, 2100");layout->addWidget(points,1);buttons(d,layout);if(d.exec()!=QDialog::Accepted)return;value.sectionName=u(name->text().trimmed());value.parentVolumeId=volume->currentData().toInt();value.coordinateSystem=u(crs->text().trimmed());value.coordinateUnit=u(unit->text().trimmed());value.pathPoints.clear();for(const auto& line:points->toPlainText().split('\n',Qt::SkipEmptyParts)){auto fields=line.trimmed().split(QRegularExpression("[,，\\s]+"),Qt::SkipEmptyParts);bool ok1=false,ok2=false;if(fields.size()!=2){showError("每行必须恰好包含 X 和 Y 两个数。");return;}double x=fields[0].toDouble(&ok1),y=fields[1].toDouble(&ok2);if(!ok1||!ok2||!std::isfinite(x)||!std::isfinite(y)){showError("路径坐标必须是有限数值。");return;}value.pathPoints.push_back({x,y});}if(!service_.saveSection(id,value,error)){showError(error);return;}selectKind("sections");refreshEntries();}
 
-void MainWindow::extractSection(){if(!ready()||!requireIdle())return;const auto* e=currentEntry();if(!e||currentKind()!="sections"){showError("请先选择二维地震剖面路径。");return;}QDialog d(this);d.setWindowTitle(QStringLiteral("提取二维地震剖面"));auto* layout=new QVBoxLayout(&d);auto* form=new QFormLayout;layout->addLayout(form);auto* first=number(form,QStringLiteral("开始时间（按地震体时间单位）"),Missing);auto* last=number(form,QStringLiteral("结束时间（空为全部）"),Missing);auto* columns=new QSpinBox;columns->setRange(2,5000);columns->setValue(1000);form->addRow(QStringLiteral("最大输出道数"),columns);layout->addWidget(new QLabel(QStringLiteral("单次最多返回 800 万个振幅值。文件和坐标约定必须有效。")));buttons(d,layout);if(d.exec()!=QDialog::Accepted)return;SectionReadOptions options;if(!parseNumber(first,options.firstTime)||!parseNumber(last,options.lastTime)){showError("时间请输入有限数字或留空。");return;}options.maxColumns=columns->value();const auto id=e->id;const auto project=service_.projectPath();setBusy(true);QPointer<MainWindow> guard(this);worker_=QThread::create([this,guard,id,project,options]{std::string error;SeismicSectionResult result;bool ok=false;try{DataService service;ok=service.openProject(project,error)&&service.extractSection(id,options,result,error,[this]{return cancelled_.load();});}catch(const std::exception& e){error=e.what();}catch(...){error="后台剖面读取发生未知错误。";}if(guard)QMetaObject::invokeMethod(guard.data(),[guard,ok,result=std::move(result),error]{if(!guard)return;guard->setBusy(false);if(guard->closeWhenIdle_)return;if(!ok){guard->showError(error);return;}guard->imagePreview_->setSection(result);guard->tabs_->setCurrentIndex(2);guard->statusBar()->showMessage(QStringLiteral("剖面读取完成：%1 道 × %2 样点").arg(result.columns).arg(result.samples));},Qt::QueuedConnection);});observeWorker();}
+void MainWindow::extractSection(){
+    if(!ready()||!requireIdle())return;
+    const auto* entry=currentEntry();
+    if(!entry||currentKind()!="sections"){showError("请先选择剖面路径；可用“新建剖面路径”按顺序输入多个 X,Y 点。");return;}
+    QDialog dialog(this);dialog.setWindowTitle(QStringLiteral("提取高清剖面 / 多点剖面墙"));
+    auto* layout=new QVBoxLayout(&dialog);auto* form=new QFormLayout;layout->addLayout(form);
+    auto* first=number(form,QStringLiteral("开始时间（按地震体时间单位）"),Missing);
+    auto* last=number(form,QStringLiteral("结束时间（空为全部）"),Missing);
+    auto* hd=new QCheckBox(QStringLiteral("原始分辨率：按原始网格取道，保留全部时间样点"));hd->setChecked(true);form->addRow(hd);
+    auto* columns=new QSpinBox;columns->setRange(2,8192);columns->setValue(1000);columns->setEnabled(false);
+    form->addRow(QStringLiteral("快速预览最大道数"),columns);
+    connect(hd,&QCheckBox::toggled,columns,[columns](bool checked){columns->setEnabled(!checked);});
+    auto* note=new QLabel(QStringLiteral("按多个坐标点的顺序生成折线剖面，保留转折点；振幅取自最近原始道。\n单次最多 6400 万个振幅；超限请缩小时间范围，不会自动降低高清精度。\n图形区可切换“剖面墙”，缩放至 1:1，并导出原尺寸剖面或剖面墙 PNG。"));
+    note->setWordWrap(true);layout->addWidget(note);buttons(dialog,layout);if(dialog.exec()!=QDialog::Accepted)return;
+    SectionReadOptions options;options.fullResolution=hd->isChecked();options.maxValues=64000000;options.maxColumns=columns->value();
+    if(!parseNumber(first,options.firstTime)||!parseNumber(last,options.lastTime)){showError("时间请输入有限数字或留空。");return;}
+    const auto id=entry->id;const auto project=service_.projectPath();setBusy(true);QPointer<MainWindow> guard(this);
+    worker_=QThread::create([this,guard,id,project,options]{
+        std::string error;SeismicSectionResult result;bool ok=false;
+        try{DataService service;ok=service.openProject(project,error)&&service.extractSection(id,options,result,error,[this]{return cancelled_.load();});}
+        catch(const std::exception& e){error=e.what();}catch(...){error="后台剖面读取发生未知错误。";}
+        if(guard)QMetaObject::invokeMethod(guard.data(),[guard,ok,result=std::move(result),error]{
+            if(!guard)return;guard->setBusy(false);if(guard->closeWhenIdle_)return;if(!ok){guard->showError(error);return;}
+            guard->imagePreview_->setSection(result);guard->tabs_->setCurrentIndex(2);
+            guard->statusBar()->showMessage(QStringLiteral("剖面：%1 列 × %2 样点，%3；可切换剖面墙或导出原尺寸图像。")
+                .arg(result.columns).arg(result.samples).arg(result.decimated?QStringLiteral("抽样预览"):QStringLiteral("原始分辨率")));
+        },Qt::QueuedConnection);
+    });observeWorker();
+}

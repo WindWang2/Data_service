@@ -11,7 +11,7 @@
 | `readSeismicTrace` | 地震体编号、物理道下标、样点窗口 | `SeismicTraceResult` |
 | `readSeismicLine` | 地震体编号、`inline`/`crossline`、实际测线号 | `SeismicSectionResult` |
 | `readSeismicTimeSlice` | 地震体编号、时间、网格上限 | `SeismicTimeSliceResult` |
-| `extractSection` | 已保存 XY 路径剖面编号 | 沿路径提取的剖面 |
+| `extractSection` | 已保存 XY 路径剖面编号，或直接传 `SeismicSection` 对象 | 沿多点路径提取的剖面及墙几何 |
 | `readTimeSlice` | 地震体编号、已确认时间约定 | 业务时间切片 |
 
 `traceIndex` 是从 0 开始的文件道位置，`traceNumber` 是原道头值，两者不保证相同。INLINE/XLINE 使用实际测线号，不使用数组下标。
@@ -44,6 +44,8 @@ if (!service.readSeismicTrace(volumeId, info.traceCount / 2,
 ```
 
 完整例子见 [案例 09](../examples/getting_started/09_segyio/main.cpp)。命令行用法为 `example_09_segyio <工区目录> [地震体编号]`。
+
+需要完整采样时显式开启 `fullResolution=true`，并提供足够的 `maxValues`（最多 6400 万个振幅）。高清模式超预算报错，不静默抽样。界面默认高清，支持 1:1、原尺寸导出和多坐标点剖面墙，见 [高清读取指南](hd-seismic.md) 与 [案例 10](../examples/getting_started/10_hd_seismic/main.cpp)。
 
 ## 数组布局
 

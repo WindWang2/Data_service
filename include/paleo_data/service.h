@@ -101,8 +101,9 @@ struct ImportReport {
 using ProgressCallback = std::function<void(const ImportProgress&)>;
 struct SectionReadOptions {
     double firstTime=Missing, lastTime=Missing; // 请求的时间范围；Missing 表示不限制对应端。
-    int maxColumns=1000;                       // 限制沿剖面路径返回的列数。
-    long long maxValues=8000000;               // 限制本次振幅数组大小，避免无界读取。
+    int maxColumns=1000;                       // 预览模式的列数上限；原始分辨率模式忽略此项。
+    long long maxValues=8000000;               // 本次振幅预算，可显式增至64000000；超预算拒绝读取。
+    bool fullResolution=false;                // true：保留原始道及时间样点，不为满足预算而降采样。
 };
 struct SeismicSectionResult {
     int columns=0, samples=0;                  // 剖面列数、每列样点数。
@@ -113,14 +114,24 @@ struct SeismicSectionResult {
     // 时间 = firstTime + sample * sampleInterval。缺道为 NaN，零振幅是有效数据。
     std::vector<long long> traceIndexes;       // 每列在原文件中的位置；缺道为-1。
     std::vector<int> inlineNumbers, crosslineNumbers; // 每列实际测线编号。
+    std::vector<double> pathX,pathY,distances;  // 每列在请求路径上的位置、从起点累计距离（坐标单位）。
+    std::vector<int> vertexColumns;            // 折线路径的每个输入顶点对应的列号，顺序不变。
+    int nativeColumns=0;                      // 降采样前的原始测线列数/路径经过的网格列数。
+    bool decimated=false;                     // true 表示空间列已减少；时间样点始终不抽稀。
 };
-struct TimeSliceReadOptions { int maxInlineCount=512, maxCrosslineCount=512; long long maxValues=262144; };
+struct TimeSliceReadOptions {
+    int maxInlineCount=512, maxCrosslineCount=512; // 预览时的轴上限。
+    long long maxValues=262144;                // 可显式增至64000000；包含X/Y时总内存高于振幅数组。
+    bool fullResolution=false;                // true 忽略预览轴上限，预算不足时报错，不静默降采样。
+};
 struct SeismicTimeSliceResult {
     std::vector<int> inlineNumbers,crosslineNumbers; // 实际测线号，不是数组下标。
     std::vector<double> x,y;                         // 与振幅数组逐位置对应的坐标。
     std::vector<float> amplitudes;                   // 行优先：inlineIndex * crosslineNumbers.size() + crosslineIndex。
     double actualTime=Missing;                       // 实际取到的最近样点时间。
     std::string timeUnit;
+    int nativeInlineCount=0, nativeCrosslineCount=0;
+    bool decimated=false;
 };
 
 // 对外的 C++ 数据服务入口。调用者无需直接访问 SQLite 或文件解析器。
@@ -217,6 +228,10 @@ public:
     bool seismicStatistics(const std::vector<float>& amplitudes, SeismicStatistics& result, std::string& error,
                            const CancelCheck& cancelled={}) const;
     bool extractSection(long long sectionId, const SectionReadOptions& options, SeismicSectionResult& result, std::string& error, const CancelCheck& cancelled={});
+    // 直接用多个有序XY坐标提取剖面墙，无需先保存路径。坐标与时间约定必须与所属体一致。
+    // fullResolution 时访问路径穿过的原生网格道；振幅取最近网格道，不插值、不复制地震体。
+    // pathX/pathY/distances 描述墙体几何；x/y/traceIndexes 描述实际来源道；缺道保留NaN。
+    bool extractSection(const SeismicSection& section, const SectionReadOptions& options, SeismicSectionResult& result, std::string& error, const CancelCheck& cancelled={});
     bool readTimeSlice(long long volumeId, double time, const TimeSliceReadOptions& options, SeismicTimeSliceResult& result, std::string& error, const CancelCheck& cancelled={});
     bool backupDatabase(const std::string& destination, std::string& error) const;
 private:

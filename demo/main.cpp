@@ -9,6 +9,8 @@
 #include <QDebug>
 #include <QSaveFile>
 #include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QCheckBox>
 #include <QAction>
 #include <QComboBox>
 #include <QDialog>
@@ -22,11 +24,13 @@ int main(int argc,char** argv){
     parser.addOption({"view",QStringLiteral("初始资料分类：curves / intervals / maps / sections 等"),"kind"});
     parser.addOption({"tab",QStringLiteral("初始页面：data / curve / image / sources / issues"),"name"});
     parser.addOption({"smoke-ui",QStringLiteral("显示后保存截图并退出（用于界面验证）"),"png"});
-    parser.addOption({"example",QStringLiteral("接口示例：wells / curve / intervals / time_depth / section / slice / seismic_info / seismic_trace / inline / crossline / seismic_slice / processed_section"),"kind"});
+    parser.addOption({"example",QStringLiteral("接口示例：wells / curve / intervals / time_depth / section / wall / slice / seismic_info / seismic_trace / inline / crossline / seismic_slice / processed_section"),"kind"});
     parser.addOption({"run-example",QStringLiteral("执行所选接口示例；与 smoke-ui 配合时等执行结束后截图")});
     parser.addOption({"example-resource",QStringLiteral("接口示例的曲线 / 剖面 / 地震体编号"),"id"});
     parser.addOption({"example-first",QStringLiteral("接口示例顶深 / 起始时间 / 切片时间 / 地震道位置 / 测线号"),"number"});
     parser.addOption({"example-last",QStringLiteral("接口示例底深 / 结束时间；原生地震示例为样点数 / 最大道数 / 每轴位置数"),"number"});
+    parser.addOption({"example-points",QStringLiteral("剖面墙有序坐标：X,Y;X,Y;X,Y，坐标约定必须与所选地震体一致"),"points"});
+    parser.addOption({"preview",QStringLiteral("将地震示例切换为抽样预览；默认读取原始分辨率")});
     parser.addOption({"code-tab",QStringLiteral("接口左侧页签：0导包 / 1代码 / 2返回类型"),"index"});
     parser.addOption({"result-tab",QStringLiteral("接口右侧页签：0图形 / 1JSON"),"index"});
     parser.addOption({"export-code",QStringLiteral("保存当前可编译的 C++ 示例"),"cpp"});
@@ -41,6 +45,8 @@ int main(int argc,char** argv){
     if(parser.isSet("example-resource")){bool ok=false;const auto id=parser.value("example-resource").toLongLong(&ok);if(!ok||!window.apiDemo()->selectResource(id))return 4;}
     if(parser.isSet("example-first"))window.apiDemo()->findChild<QLineEdit*>("apiFirstValue")->setText(parser.value("example-first"));
     if(parser.isSet("example-last"))window.apiDemo()->findChild<QLineEdit*>("apiLastValue")->setText(parser.value("example-last"));
+    if(parser.isSet("example-points"))window.apiDemo()->findChild<QPlainTextEdit*>("apiWallCoordinates")->setPlainText(parser.value("example-points").replace(';','\n'));
+    if(parser.isSet("preview"))window.apiDemo()->findChild<QCheckBox*>("apiFullResolution")->setChecked(false);
     auto saveText=[](const QString& path,const QString& value){QDir().mkpath(QFileInfo(path).absolutePath());QSaveFile file(path);const auto bytes=value.toUtf8();return file.open(QIODevice::WriteOnly)&&file.write(bytes)==bytes.size()&&file.commit();};
     if(parser.isSet("export-code")&&!saveText(parser.value("export-code"),window.apiDemo()->generatedCode()))return 6;
     if(parser.isSet("tutorial-case")){

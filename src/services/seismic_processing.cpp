@@ -6,7 +6,7 @@
 
 namespace paleo::data {
 namespace {
-constexpr size_t ValueLimit = 8000000;
+constexpr size_t ValueLimit = 64000000; // 与高清读取的振幅预算保持一致。
 bool fail(std::string& error, const char* text) { error = text; return false; }
 bool cancelled(const CancelCheck& check, std::string& error) {
     if (check && check()) { error = "地震处理已取消"; return true; }
@@ -86,7 +86,7 @@ bool DataService::processSeismicTrace(const SeismicTraceResult& input, const Sei
     error.clear();
     // 先复制再清空输出，使 processSeismicTrace(trace, options, trace, ...) 也能安全使用。
     if (input.amplitudes.empty() || input.amplitudes.size() > ValueLimit) {
-        result = {}; return fail(error, "待处理地震道需有1到8000000个样点");
+        result = {}; return fail(error, "待处理地震道需有1到64000000个样点");
     }
     if (!validate(options, error) || cancelled(check, error)) { result = {}; return false; }
     auto output = input; result = {};
@@ -99,11 +99,13 @@ bool DataService::processSeismicSection(const SeismicSectionResult& input, const
     error.clear();
     if (input.columns <= 0 || input.samples <= 0 || input.amplitudes.size() > ValueLimit ||
         static_cast<unsigned long long>(input.columns) * input.samples != input.amplitudes.size()) {
-        result = {}; return fail(error, "剖面尺寸与振幅数组不一致，或超过8000000值上限");
+        result = {}; return fail(error, "剖面尺寸与振幅数组不一致，或超过64000000值上限");
     }
     const auto validColumns = [&](size_t count) { return count == 0 || count == size_t(input.columns); };
     if (!validColumns(input.x.size()) || !validColumns(input.y.size()) || !validColumns(input.traceIndexes.size()) ||
-        !validColumns(input.inlineNumbers.size()) || !validColumns(input.crosslineNumbers.size())) {
+        !validColumns(input.inlineNumbers.size()) || !validColumns(input.crosslineNumbers.size()) ||
+        !validColumns(input.pathX.size()) || !validColumns(input.pathY.size()) || !validColumns(input.distances.size()) ||
+        std::any_of(input.vertexColumns.begin(),input.vertexColumns.end(),[&](int c){return c<0||c>=input.columns;})) {
         result = {}; return fail(error, "剖面位置数组与列数不一致");
     }
     if (!validate(options, error) || cancelled(check, error)) { result = {}; return false; }
@@ -115,7 +117,7 @@ bool DataService::processSeismicSection(const SeismicSectionResult& input, const
 bool DataService::seismicStatistics(const std::vector<float>& amplitudes, SeismicStatistics& result,
                                     std::string& error, const CancelCheck& check) const {
     result = {}; error.clear();
-    if (amplitudes.size() > ValueLimit) return fail(error, "统计数组超过8000000值上限");
+    if (amplitudes.size() > ValueLimit) return fail(error, "统计数组超过64000000值上限");
     SeismicStatistics output; double sum = 0, square = 0;
     for (size_t i = 0; i < amplitudes.size(); ++i) {
         if ((i % 4096) == 0 && cancelled(check, error)) return false;

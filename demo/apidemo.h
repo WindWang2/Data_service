@@ -34,10 +34,10 @@ private:
     std::vector<paleo::data::WellSummary> wells_;
     QComboBox *example_=nullptr, *well_=nullptr, *resource_=nullptr;
     QLineEdit *first_=nullptr, *last_=nullptr;
-    QCheckBox* processed_=nullptr;
+    QCheckBox *processed_=nullptr, *fullResolution_=nullptr;
     QPushButton *run_=nullptr, *cancel_=nullptr, *refresh_=nullptr;
     QLabel *summary_=nullptr, *firstLabel_=nullptr, *lastLabel_=nullptr, *resourceLabel_=nullptr, *wellLabel_=nullptr, *status_=nullptr;
-    QPlainTextEdit *code_=nullptr, *json_=nullptr, *schema_=nullptr;
+    QPlainTextEdit *code_=nullptr, *json_=nullptr, *schema_=nullptr, *pathPoints_=nullptr;
     QTabWidget *codeTabs_=nullptr, *resultTabs_=nullptr;
     QStackedWidget* visuals_=nullptr;
     QTableWidget* wellTable_=nullptr;

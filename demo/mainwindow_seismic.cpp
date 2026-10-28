@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "plotwidgets.h"
 #include <QComboBox>
+#include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -87,14 +88,17 @@ void MainWindow::extractTimeSlice(){
     SeismicVolume volume;std::string error;if(!service_.readVolume(entry->id,volume,error)){showError(error);return;}
     QDialog d(this);d.setWindowTitle(QStringLiteral("读取水平时间切片"));auto* layout=new QVBoxLayout(&d);auto* form=new QFormLayout;layout->addLayout(form);
     auto* time=new QDoubleSpinBox;time->setRange(-1e12,1e12);time->setDecimals(6);time->setValue(std::isfinite(volume.sampling.firstTime)?volume.sampling.firstTime:0);form->addRow(QStringLiteral("时间（%1）").arg(volume.sampling.timeUnit.empty()?QStringLiteral("单位未确认"):q(volume.sampling.timeUnit)),time);
-    auto* note=new QLabel(QStringLiteral("按最近样点读取；预览最多 512 × 512 个网格点。\n坐标与时间约定需要先在“编辑选中记录”中确认。"));note->setWordWrap(true);layout->addWidget(note);buttons(d,layout);if(d.exec()!=QDialog::Accepted)return;
+    auto* hd=new QCheckBox(QStringLiteral("原始分辨率（保留全部 IL / XL 网格）"));hd->setChecked(true);form->addRow(hd);
+    auto* note=new QLabel(QStringLiteral("按最近时间样点读取。高清模式保留全部网格，超过 6400 万点时明确报错。\n取消勾选则读取最多 512 × 512 的快速预览；完整切片的磁盘读取可能较慢，可取消。\n坐标与时间约定需先确认。图形区支持滚轮缩放、拖动、1:1 和原尺寸 PNG 导出。"));note->setWordWrap(true);layout->addWidget(note);buttons(d,layout);if(d.exec()!=QDialog::Accepted)return;
+    TimeSliceReadOptions options;options.fullResolution=hd->isChecked();options.maxValues=64000000;
     const auto id=entry->id;const auto project=service_.projectPath();const double requested=time->value();setBusy(true);QPointer<MainWindow> guard(this);
-    worker_=QThread::create([this,guard,id,project,requested]{
+    worker_=QThread::create([this,guard,id,project,requested,options]{
         bool ok=false;std::string error;SeismicTimeSliceResult result;
-        try{DataService service;ok=service.openProject(project,error)&&service.readTimeSlice(id,requested,{},result,error,[this]{return cancelled_.load();});}catch(const std::exception& e){error=e.what();}catch(...){error="后台时间切片读取发生未知错误。";}
+        try{DataService service;ok=service.openProject(project,error)&&service.readTimeSlice(id,requested,options,result,error,[this]{return cancelled_.load();});}catch(const std::exception& e){error=e.what();}catch(...){error="后台时间切片读取发生未知错误。";}
         if(guard)QMetaObject::invokeMethod(guard.data(),[guard,ok,result=std::move(result),error]{
             if(!guard)return;guard->setBusy(false);if(guard->closeWhenIdle_)return;if(!ok){guard->showError(error);return;}
-            guard->imagePreview_->setTimeSlice(result);guard->tabs_->setCurrentIndex(2);guard->statusBar()->showMessage(QStringLiteral("水平时间切片读取完成。"));
+            guard->imagePreview_->setTimeSlice(result);guard->tabs_->setCurrentIndex(2);guard->statusBar()->showMessage(QStringLiteral("时间切片：%1 × %2，%3；可用 1:1 查看或导出原尺寸图像。")
+                .arg(result.crosslineNumbers.size()).arg(result.inlineNumbers.size()).arg(result.decimated?QStringLiteral("抽样预览"):QStringLiteral("原始网格")));
         },Qt::QueuedConnection);
     });observeWorker();
 }

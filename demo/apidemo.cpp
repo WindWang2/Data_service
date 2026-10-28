@@ -17,6 +17,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QStringList>
 #include <QSplitter>
@@ -173,8 +174,9 @@ direction: "inline" 或 "crossline"
 lineNumber: 真实测线号；本示例留空时从探测网格选择中间线
 SectionReadOptions options;
 options.firstTime / lastTime     时间窗，Missing表示不限
-options.maxColumns              最大输出道数（本例默认512）
-options.maxValues               最大振幅数（本例2000000）
+options.fullResolution          本例默认true：保留原网格全部道和时间样点
+options.maxColumns              仅预览模式生效，默认512
+options.maxValues               最大振幅数64000000；超限报错而非暗中抽样
 
 SeismicSectionResult result;
 result.columns / samples        列数、每列样点数
@@ -183,6 +185,7 @@ result.inlineNumbers / crosslineNumbers
 result.x / y                     实际道位置；未知则NaN
 result.amplitudes               列优先：column * samples + sample
 result.firstTime / sampleInterval / timeUnit
+result.nativeColumns / decimated 原网格列数 / 是否经过抽样
 
 无需先确认CRS即可看原生测线；网格定位与实际道头逐道核对。
 “基础处理”示例额外调用 processSeismicSection：
@@ -196,14 +199,18 @@ removeMean=false，gain=1，agcWindowSamples=101，clipAmplitude=3。
 TimeSliceReadOptions options;
 options.maxInlineCount / maxCrosslineCount  每个轴的最大位置数
 options.maxValues                         返回振幅数量上限
+options.fullResolution                    true时读取原始全部测线位置
 
 SeismicTimeSliceResult result;
 result.actualTime / timeUnit                最近采样时间，单位ms
 result.inlineNumbers / crosslineNumbers     真实测线编号
 result.x / y / amplitudes                   同位置的坐标与振幅
+result.nativeInlineCount / nativeCrosslineCount 原网格尺寸
+result.decimated                           是否进行了抽样
 
 行优先：index = inlineIndex * crosslineNumbers.size() + crosslineIndex。
-本例默认每轴128个位置；读取相应道的一个样点，不读取每道全部振幅。
+本例默认高清：读取全网格的一个时间样点，不读取每道全部振幅。
+取消高清勾选才启用每轴128个位置的预览上限；大网格读取需要更久，可取消。
 时间留空时从文件采样轴选择中间时间。网格或采样不一致会明确报错。
 这是来源原生网格预览；不要求事先确认CRS、TWT、OWT，也不替用户猜测。
 )PDS");
@@ -283,23 +290,35 @@ quality: 0 正常，1 空值，2 阈值异常，4 人工修改。
 绘图使用同一次调用返回的 CurveSlice，不重新读取文件。
 JSON 仅展示前 10 个位置；NaN 在 JSON 中显示 null。
 )PDS");
-    if(kind=="section")return QString::fromUtf8(R"PDS(bool extractSection(sectionId, const SectionReadOptions& options,
+    if(kind=="section"||kind=="wall")return QString::fromUtf8(R"PDS(bool extractSection(sectionId, const SectionReadOptions& options,
                     SeismicSectionResult& result, error, cancelled={});
+bool extractSection(const SeismicSection& path, const SectionReadOptions& options,
+                    SeismicSectionResult& result, error, cancelled={});
+
+SeismicSection path;
+path.parentVolumeId             已登记地震体的编号
+path.coordinateSystem / coordinateUnit 与该体已确认的约定一致
+path.pathPoints                  按顺序排列的X,Y数组；两点为直线，多点为折线
 
 struct SeismicSectionResult {
     int columns, samples;
     double firstTime, sampleInterval;
     std::string timeUnit;
     std::vector<double> x, y;      // 每列实际道位置
+    std::vector<double> pathX, pathY; // 每列在请求折线路径上的位置
+    std::vector<double> distances; // 沿路径的累计距离
+    std::vector<int> vertexColumns; // 每个输入拐点对应哪一列
     std::vector<float> amplitudes; // 振幅：列优先
 };
 
 amplitudes[column * samples + sample]
 time = firstTime + sample * sampleInterval
 
-sectionId 是已保存的 XY 路径，已关联地震体。
+sectionId 是已保存的 XY 路径；直接传path对象时无须先保存。
 路径至少两点；坐标系、单位、时间约定需要先确认。
-本示例最多 512 列、200 万个振幅值，后台执行，可取消。
+本例默认fullResolution=true，保留折线拐点，按原网格精度采样，不插值造细节。
+最多6400万个振幅，超限请缩小时间窗；后台执行，可取消。
+实际读取道位置为x/y，构造剖面墙使用pathX/pathY和时间轴。
 读取时访问地震文件，数据库只持久化路径和元信息。
 缺道为 NaN；0 是有效振幅，不作为缺失值。
 JSON 仅展示前 10 个位置；图形使用同一次调用的返回数组。
@@ -321,7 +340,8 @@ inlineNumbers / crosslineNumbers 是实际测线编号，不是数组索引。
 
 time 使用地震体已经确认的时间单位。
 返回 actualTime 为最近样点时间，不隐式插值。
-本示例最多 256 × 256 网格；缺道为 NaN，JSON 显示 null。
+本示例默认读取原网格，6400万振幅预算超限即报错；缺道为NaN，JSON显示null。
+取消高清勾选后才使用256×256预览。返回decimated说明是否被抽样。
 绘图来自同一次读取的返回结果，不把整个地震体载入数据库。
 )PDS");
 }
@@ -332,6 +352,8 @@ struct ApiDemoWidget::Request {
     long long wellId=0,resourceId=0;
     double first=Missing,last=Missing;
     bool processed=true;
+    bool fullResolution=true;
+    std::vector<SeismicSectionPoint> pathPoints;
 };
 struct ApiDemoWidget::Result {
     bool ok=false;
@@ -366,12 +388,15 @@ ApiDemoWidget::ApiDemoWidget(QWidget* parent):QWidget(parent){
     example_->addItem(QStringLiteral("横测线 XLINE · readSeismicLine"),"crossline");
     example_->addItem(QStringLiteral("原生时间切片 · readSeismicTimeSlice"),"seismic_slice");
     example_->addItem(QStringLiteral("剖面基础处理 · AGC / 限幅"),"processed_section");
+    example_->addItem(QStringLiteral("多点坐标剖面墙 · extractSection"),"wall");
     wellLabel_=new QLabel(QStringLiteral("井"));selectors->addWidget(wellLabel_);well_=new QComboBox;well_->setObjectName("apiWellSelector");well_->setMinimumWidth(150);selectors->addWidget(well_,1);
     resourceLabel_=new QLabel(QStringLiteral("曲线"));selectors->addWidget(resourceLabel_);resource_=new QComboBox;resource_->setObjectName("apiResourceSelector");resource_->setMinimumWidth(170);selectors->addWidget(resource_,2);
     refresh_=new QPushButton(QStringLiteral("刷新可用资料"));refresh_->setObjectName("apiRefresh");selectors->addWidget(refresh_);layout->addLayout(selectors);
     auto* parameters=new QHBoxLayout;firstLabel_=new QLabel(QStringLiteral("顶深"));parameters->addWidget(firstLabel_);first_=new QLineEdit;first_->setObjectName("apiFirstValue");first_->setPlaceholderText(QStringLiteral("空为不限"));first_->setMaximumWidth(150);parameters->addWidget(first_);lastLabel_=new QLabel(QStringLiteral("底深"));parameters->addWidget(lastLabel_);last_=new QLineEdit;last_->setObjectName("apiLastValue");last_->setPlaceholderText(QStringLiteral("空为不限"));last_->setMaximumWidth(150);parameters->addWidget(last_);
     processed_=new QCheckBox(QStringLiteral("读取处理值"));processed_->setObjectName("apiProcessed");processed_->setChecked(true);parameters->addWidget(processed_);parameters->addStretch();
+    fullResolution_=new QCheckBox(QStringLiteral("原始分辨率（高清）"));fullResolution_->setObjectName("apiFullResolution");fullResolution_->setChecked(true);fullResolution_->setToolTip(QStringLiteral("保留原网格的全部道及时间样点；超过 6400 万振幅预算会明确报错。取消勾选才使用抽样预览。"));parameters->addWidget(fullResolution_);
     run_=new QPushButton(QStringLiteral("▶ 执行示例"));run_->setObjectName("apiRun");run_->setMinimumWidth(130);parameters->addWidget(run_);cancel_=new QPushButton(QStringLiteral("取消"));cancel_->setObjectName("apiCancel");cancel_->setVisible(false);parameters->addWidget(cancel_);layout->addLayout(parameters);
+    pathPoints_=new QPlainTextEdit;pathPoints_->setObjectName("apiWallCoordinates");pathPoints_->setMaximumHeight(94);pathPoints_->setPlaceholderText(QStringLiteral("依次输入剖面墙的拐点，每行 X,Y（至少两点）。\n坐标必须与所选地震体已经确认的坐标系和单位一致。"));layout->addWidget(pathPoints_);
     summary_=new QLabel;summary_->setObjectName("apiAvailability");summary_->setWordWrap(true);layout->addWidget(summary_);
     auto* split=new QSplitter(Qt::Horizontal,this);split->setChildrenCollapsible(false);layout->addWidget(split,1);
     codeTabs_=new QTabWidget;codeTabs_->setObjectName("apiCodeTabs");codeTabs_->setMinimumWidth(300);
@@ -391,6 +416,8 @@ ApiDemoWidget::ApiDemoWidget(QWidget* parent):QWidget(parent){
         parametersChanged();
     }});
     connect(first_,&QLineEdit::textChanged,this,[this]{if(!updating_)parametersChanged();});connect(last_,&QLineEdit::textChanged,this,[this]{if(!updating_)parametersChanged();});connect(processed_,&QCheckBox::toggled,this,[this]{if(!updating_)parametersChanged();});
+    connect(fullResolution_,&QCheckBox::toggled,this,[this]{if(!updating_)parametersChanged();});
+    connect(pathPoints_,&QPlainTextEdit::textChanged,this,[this]{if(!updating_)parametersChanged();});
     connect(run_,&QPushButton::clicked,this,&ApiDemoWidget::runExample);connect(cancel_,&QPushButton::clicked,this,&ApiDemoWidget::requestCancel);connect(refresh_,&QPushButton::clicked,this,[this]{reloadChoices();});
     exampleChanged();
 }
@@ -400,7 +427,7 @@ bool ApiDemoWidget::lastRunSucceeded()const{return succeeded_;}
 QString ApiDemoWidget::lastResultJson()const{return json_->toPlainText();}
 QString ApiDemoWidget::generatedCode()const{return code_->toPlainText();}
 void ApiDemoWidget::requestCancel(){if(worker_){cancelRequested_=true;cancel_->setEnabled(false);status_->setText(QStringLiteral("已请求取消，等待当前服务调用安全结束。"));}}
-void ApiDemoWidget::setProjectPath(const QString& path){if(isRunning())return;projectPath_=path;reloadChoices();}
+void ApiDemoWidget::setProjectPath(const QString& path){if(isRunning())return;if(path!=projectPath_){QSignalBlocker blocker(pathPoints_);pathPoints_->clear();}projectPath_=path;reloadChoices();}
 void ApiDemoWidget::setExample(const QString& kind){if(isRunning())return;int i=example_->findData(kind);if(i>=0){if(i==example_->currentIndex())exampleChanged();else example_->setCurrentIndex(i);}}
 bool ApiDemoWidget::selectResource(long long id){
     if(isRunning())return false;
@@ -452,8 +479,9 @@ void ApiDemoWidget::reloadResources(){
 void ApiDemoWidget::exampleChanged(){
     const auto kind=example_->currentData().toString();const bool curve=kind=="curve",wells=kind=="wells",slice=kind=="slice",intervals=kind=="intervals",timeDepth=kind=="time_depth",info=kind=="seismic_info",trace=kind=="seismic_trace",nativeSlice=kind=="seismic_slice";
     const bool byWell=curve||intervals||timeDepth;const bool hasRange=!wells&&!timeDepth&&!info;
-    wellLabel_->setVisible(byWell);well_->setVisible(byWell);resourceLabel_->setVisible(!wells);resource_->setVisible(!wells);resourceLabel_->setText(curve?QStringLiteral("曲线"):intervals?QStringLiteral("分层道"):timeDepth?QStringLiteral("时深表"):slice||nativeSeismic(kind)?QStringLiteral("地震体"):QStringLiteral("已存剖面"));
+    wellLabel_->setVisible(byWell);well_->setVisible(byWell);resourceLabel_->setVisible(!wells);resource_->setVisible(!wells);resourceLabel_->setText(curve?QStringLiteral("曲线"):intervals?QStringLiteral("分层道"):timeDepth?QStringLiteral("时深表"):slice||nativeSeismic(kind)||kind=="wall"?QStringLiteral("地震体"):QStringLiteral("已存剖面"));
     firstLabel_->setVisible(hasRange);first_->setVisible(hasRange);lastLabel_->setVisible(hasRange&&!slice);last_->setVisible(hasRange&&!slice);processed_->setVisible(curve);
+    fullResolution_->setVisible(nativeLine(kind)||nativeSlice||slice||kind=="section"||kind=="wall");pathPoints_->setVisible(kind=="wall");
     firstLabel_->setText(curve||intervals?QStringLiteral("顶深"):slice||nativeSlice?QStringLiteral("切片时间（ms）"):trace?QStringLiteral("道位置（从0开始）"):nativeLine(kind)?QStringLiteral("测线号"):QStringLiteral("起始时间"));
     // 旧切片使用已保存的单位，新原生切片明确采用文件时间轴的毫秒。
     if(slice)firstLabel_->setText(QStringLiteral("切片时间"));
@@ -466,6 +494,9 @@ void ApiDemoWidget::exampleChanged(){
 void ApiDemoWidget::invalidateResult(){succeeded_=false;setProperty("apiLastSucceeded",false);json_->clear();curve_->clear();image_->clear();tracePlot_->clear();wellTable_->clear();wellTable_->setRowCount(0);wellTable_->setColumnCount(0);}
 void ApiDemoWidget::parametersChanged(){
     invalidateResult();updateCode();const auto kind=example_->currentData().toString();
+    const bool previewLimit=nativeLine(kind)||kind=="seismic_slice";
+    last_->setEnabled(!previewLimit||!fullResolution_->isChecked());
+    if(previewLimit)lastLabel_->setText(nativeLine(kind)?QStringLiteral("预览道数上限"):QStringLiteral("预览每轴上限"));
     if(projectPath_.isEmpty()){summary_->setText(QStringLiteral("请先新建或打开工区；本页不会使用虚构数据填充结果。"));run_->setEnabled(false);}
     else if(kind=="curve"){
         summary_->setText(QStringLiteral("当前工区 %1 口井，其中 %2 口有曲线；此选择器只显示有曲线的井。深度与曲线单位沿用来源，未知单位不猜测。").arg(wells_.size()).arg(well_->count()));run_->setEnabled(resource_->count()>0);
@@ -473,18 +504,20 @@ void ApiDemoWidget::parametersChanged(){
         summary_->setText(QStringLiteral("读取所选分层道的真实层段，范围查询保留完整顶底界。类型、单位与基准见返回对象；未知项不自动补全。"));run_->setEnabled(resource_->count()>0);
     }else if(kind=="time_depth"){
         summary_->setText(QStringLiteral("读取完整的深度—时间配对点。可选择全部资料或仅待归井；不做插值、正负号翻转和单位推断。"));run_->setEnabled(resource_->count()>0);
+    }else if(kind=="wall"){
+        summary_->setText(QStringLiteral("按输入顺序连接 XY 拐点，现场提取连续剖面墙；无需先保存路径。采用所选体已经确认的坐标及时间约定。高清保留原生细节，超出预算请缩小时间窗；右键可切换剖面墙、1:1 查看和导出。"));run_->setEnabled(resource_->count()>0);
     }else if(kind=="section"){
-        summary_->setText(resource_->count()>0?QStringLiteral("从已保存的 XY 路径现场提取剖面。代码与返回结果使用相同的参数；大地震体只按需读取。"):
+        summary_->setText(resource_->count()>0?QStringLiteral("从已保存的 XY 路径现场提取剖面；默认按原网格精度取数，保留拐点。可右键查看剖面墙、缩放及导出原尺寸图像。"):
             QStringLiteral("工区尚无可用剖面。请在“资料管理”导入非空 SEG-Y、核对坐标与时间信息，再新建剖面路径，回此页刷新。"));run_->setEnabled(resource_->count()>0);
     }else if(kind=="slice"){
-        summary_->setText(resource_->count()>0?QStringLiteral("时间值采用所选地震体已确认的时间单位；返回最近样点的实际时间。"):
+        summary_->setText(resource_->count()>0?QStringLiteral("时间采用所选地震体已确认的单位；默认读取原始网格的全部位置，不进行 256×256 抽样。大网格读取会更久，可取消或切换预览。"):
             QStringLiteral("工区尚无地震体。测试目录中的空 SEG-Y 不能生成剖面；请导入真实非空文件并核对元信息后刷新。"));run_->setEnabled(resource_->count()>0);
     }else if(nativeSeismic(kind)){
         QString description=QStringLiteral("直接读取外部 SEG-Y，不复制地震体，也不把完整振幅载入数据库。原生道和网格预览无需先确认 CRS / TWT。");
         if(kind=="seismic_info")description+=QStringLiteral("本例展示文件头、布局、探测网格和限制；抽样规则网格不等于全文件校验。");
         if(kind=="seismic_trace")description+=QStringLiteral("道位置从0开始；样点数留空读取本道全部样点。");
-        if(nativeLine(kind))description+=QStringLiteral("测线号留空自动选中间线；最大道数默认512，输出最多200万振幅。");
-        if(kind=="seismic_slice")description+=QStringLiteral("时间留空选中间样点，每轴默认128个位置，只读取对应时间的样点。");
+        if(nativeLine(kind))description+=fullResolution_->isChecked()?QStringLiteral("高清保留全部道及样点，6400万振幅预算超限即报错；测线号留空选中间线。右键可1:1查看、拖动和导出原尺寸图像。"):QStringLiteral("当前为抽样预览，默认512道；勾选高清可取全部道。");
+        if(kind=="seismic_slice")description+=fullResolution_->isChecked()?QStringLiteral("高清读取全部原始网格，只取目标时间的样点；大网格读取会更久，可取消。时间留空选中间样点。"):QStringLiteral("当前为抽样预览，每轴默认128个位置；勾选高清可取完整网格。");
         if(kind=="processed_section")description+=QStringLiteral("本例对INLINE剖面做101样点RMS自动增益，再限幅到±3，保留原有0振幅。未开启去均值；源文件保持不变。");
         if(resource_->count()==0)description=QStringLiteral("请先在“资料管理”导入非空 SEG-Y。服务只登记原始路径；导入后回到本页刷新即可测试。");
         summary_->setText(description);run_->setEnabled(resource_->count()>0);
@@ -492,12 +525,13 @@ void ApiDemoWidget::parametersChanged(){
     status_->setText(QStringLiteral("参数已就绪，点击“执行示例”取得真实返回值。修改参数后会清空旧结果。"));
 }
 bool ApiDemoWidget::requestValues(Request& request,QString& error)const{
-    request.kind=example_->currentData().toString();request.project=projectPath_;request.wellId=well_->currentData().toLongLong();request.resourceId=resource_->currentData().toLongLong();request.processed=processed_->isChecked();
+    request.kind=example_->currentData().toString();request.project=projectPath_;request.wellId=well_->currentData().toLongLong();request.resourceId=resource_->currentData().toLongLong();request.processed=processed_->isChecked();request.fullResolution=fullResolution_->isChecked();
     if(request.project.isEmpty()){error=QStringLiteral("请先打开工区。");return false;}
     if(request.kind!="wells"&&request.resourceId<=0){error=QStringLiteral("当前示例没有可调用的资料，请先导入并核对资料。");return false;}
     if(request.kind!="wells"&&request.kind!="time_depth"&&request.kind!="seismic_info"){
         auto read=[&](QLineEdit* edit,double& target){if(edit->text().trimmed().isEmpty())return true;bool ok=false;target=edit->text().toDouble(&ok);return ok&&std::isfinite(target);};
-        if(!read(first_,request.first)||(request.kind!="slice"&&!read(last_,request.last))){error=QStringLiteral("范围参数必须是有限数值，或留空。");return false;}
+        const bool ignorePreviewLimit=request.fullResolution&&(nativeLine(request.kind)||request.kind=="seismic_slice");
+        if(!read(first_,request.first)||(request.kind!="slice"&&!ignorePreviewLimit&&!read(last_,request.last))){error=QStringLiteral("范围参数必须是有限数值，或留空。");return false;}
         if(request.kind=="slice"&&!std::isfinite(request.first)){error=QStringLiteral("请填写切片时间，单位采用地震体已确认的时间单位。");return false;}
         if(nativeSeismic(request.kind)){
             auto integer=[](double value,double minimum,double maximum){return std::isnan(value)||(value>=minimum&&value<=maximum&&std::floor(value)==value);};
@@ -505,7 +539,14 @@ bool ApiDemoWidget::requestValues(Request& request,QString& error)const{
             if(nativeLine(request.kind)&&(!integer(request.first,-2147483647,2147483647)||!integer(request.last,2,8192))){error=QStringLiteral("测线号须为整数；最大输出道数为2到8192，留空使用默认值。");return false;}
             if(request.kind=="seismic_slice"&&!integer(request.last,1,512)){error=QStringLiteral("每轴最大位置数须为1到512的整数，留空使用128。");return false;}
         }else if(std::isfinite(request.first)&&std::isfinite(request.last)&&request.first>request.last){error=QStringLiteral("起始值不能大于结束值。");return false;}
-    }return true;
+    }
+    if(request.kind=="wall"){
+        const auto lines=pathPoints_->toPlainText().split('\n',Qt::SkipEmptyParts);
+        if(lines.size()<2||lines.size()>10000){error=QStringLiteral("剖面墙需要 2–10000 个有序坐标点，每行 X,Y。");return false;}
+        for(const auto& line:lines){const auto cells=line.trimmed().split(QRegularExpression(QStringLiteral("[,，\\s]+")),Qt::SkipEmptyParts);bool okX=false,okY=false;const double x=cells.size()==2?cells[0].toDouble(&okX):Missing;const double y=cells.size()==2?cells[1].toDouble(&okY):Missing;
+            if(!okX||!okY||!std::isfinite(x)||!std::isfinite(y)){error=QStringLiteral("每行必须恰好包含两个有限数值：X,Y。");return false;}request.pathPoints.push_back({x,y});}
+    }
+    return true;
 }
 void ApiDemoWidget::updateCode(){
     Request request;QString error;const bool valid=requestValues(request,error);
@@ -757,8 +798,9 @@ int main(int argc, char** argv) {
     const int lineNumber = first + (count / 2) * step;
 )PDS");
         code+=QString::fromUtf8(R"PDS(    SectionReadOptions options;
-    options.maxColumns = %1;    // 超过时沿另一测线轴抽样，不改变原文件
-    options.maxValues = 2000000;
+    options.fullResolution = %2; // true保留全部道；false才启用抽样预览
+    options.maxColumns = %1;    // 仅预览模式使用；高清不会用这个数截断
+    options.maxValues = 64000000; // 高清超限即报错，请缩小时间窗
     options.firstTime = Missing; // 全部时间；需要时可改成具体的毫秒数
     options.lastTime = Missing;
     SeismicSectionResult raw;
@@ -766,7 +808,7 @@ int main(int argc, char** argv) {
     if (!success) { std::cerr << error << '\n'; return 4; }
     // raw.amplitudes列优先：第column列、第sample样点的位置为
     // column * raw.samples + sample。负振幅保留，缺失道为NaN。
-)PDS").arg(std::isfinite(request.last)?int(request.last):512);
+)PDS").arg(std::isfinite(request.last)?int(request.last):512).arg(request.fullResolution?"true":"false");
         if(request.kind=="processed_section")code+=QString::fromUtf8(R"PDS(    // 第5步：仅处理本次剖面数组，保留raw作为原始结果，不写回SEG-Y。
     SeismicProcessingOptions processing;
     processing.removeMean = false;  // 默认保留原有0振幅；不逐道减均值
@@ -781,7 +823,8 @@ int main(int argc, char** argv) {
 )PDS");
         else code+=QStringLiteral("    const SeismicSectionResult& result = raw; // 原始返回结果直接绘图\n");
         code+=QString::fromUtf8(R"PDS(    std::cout << "line=" << lineNumber << " columns=" << result.columns
-              << " samples=" << result.samples << '\n';
+              << " samples=" << result.samples << " nativeColumns=" << result.nativeColumns
+              << " decimated=" << result.decimated << '\n';
     for (size_t i = 0; i < result.amplitudes.size() && i < 10; ++i)
         std::cout << result.amplitudes[i] << '\n';
     SeismicStatistics statistics;
@@ -804,7 +847,8 @@ int main(int argc, char** argv) {
         code+=QString::fromUtf8(R"PDS(    TimeSliceReadOptions options;
     options.maxInlineCount = %1;
     options.maxCrosslineCount = %1;
-    options.maxValues = %2;
+    options.fullResolution = %2; // true读取原网格；false才使用上面的预览轴上限
+    options.maxValues = 64000000; // 超限明确报错，不悄悄降低分辨率
     SeismicTimeSliceResult result;
     success = service.readSeismicTimeSlice(volumeId, timeMs, options, result, error);
     if (!success) { std::cerr << error << '\n'; return 3; }
@@ -814,15 +858,16 @@ int main(int argc, char** argv) {
     // 行优先：inlineIndex * result.crosslineNumbers.size() + crosslineIndex。
     for (size_t i = 0; i < result.amplitudes.size() && i < 10; ++i)
         std::cout << result.amplitudes[i] << '\n';
-)PDS").arg(std::isfinite(request.last)?int(request.last):128).arg(std::isfinite(request.last)?int(request.last)*int(request.last):16384);
+)PDS").arg(std::isfinite(request.last)?int(request.last):128).arg(request.fullResolution?"true":"false");
     }
     else if(request.kind=="section")code+=QString::fromUtf8(R"PDS(    // 第 4 步：选择已经保存的剖面路径，它已关联一个地震体。
     const long long sectionId = %1;
     SectionReadOptions options;
     options.firstTime = %2;      // Missing 表示从允许的首样点开始
     options.lastTime = %3;       // Missing 表示到允许的末样点结束
-    options.maxColumns = 512;    // 沿路径最多提取 512 列
-    options.maxValues = 2000000; // 限制返回数组大小，避免请求过大
+    options.fullResolution = %4; // true按原网格精度取样，保留全部拐点
+    options.maxColumns = 512;    // 仅用于抽样预览
+    options.maxValues = 64000000; // 超限请缩小时间窗，不暗中抽稀
     // 时间使用地震体已确认的单位；不是所有体都默认是 ms。
 
     // 第 5 步：服务现场读取文件的必要部分，返回实际振幅数组。
@@ -852,14 +897,58 @@ int main(int argc, char** argv) {
     }
     // 将整个 result 交给剖面控件即可绘图，不需要再解析一遍 SEG-Y。
     // 0 是合法振幅，NaN 才表示缺失；这里打印首点只是演示数组访问。
-)PDS").arg(request.resourceId).arg(number(request.first),number(request.last));
+)PDS").arg(request.resourceId).arg(number(request.first),number(request.last)).arg(request.fullResolution?"true":"false");
+    else if(request.kind=="wall"){
+        code+=QString::fromUtf8(R"PDS(    // 第4步：读取地震体已经确认的坐标与时间约定。
+    // 本例输入的点必须使用同一坐标系和单位；服务不会猜测或自动投影。
+    const long long volumeId = %1;
+    SeismicVolume volume;
+    success = service.readVolume(volumeId, volume, error);
+    if (!success) { std::cerr << error << '\n'; return 2; }
+    SeismicSection path;
+    path.sectionName = "Coordinate wall";
+    path.parentVolumeId = volume.volumeId;
+    path.coordinateSystem = volume.geometry.coordinateSystem;
+    path.coordinateUnit = volume.geometry.coordinateUnit;
+    // 有序点组成连续折线。每段成为墙的一面；不必将路径先存入数据库。
+    path.pathPoints = {
+)PDS").arg(request.resourceId);
+        for(const auto& point:request.pathPoints)code+=QStringLiteral("        {%1, %2},\n").arg(number(point.x),number(point.y));
+        code+=QString::fromUtf8(R"PDS(    };
+    SectionReadOptions options;
+    options.firstTime = %1; // 时间单位采用volume.sampling.timeUnit
+    options.lastTime = %2;
+    options.fullResolution = %3;
+    options.maxColumns = 512; // 仅预览模式使用
+    options.maxValues = 64000000;
+    SeismicSectionResult result;
+    success = service.extractSection(path, options, result, error);
+    if (!success) { std::cerr << error << '\n'; return 3; }
+
+    // 第5步：结果是实际振幅，不是文件路径，也不需要再解析SEG-Y。
+    // (pathX[column],pathY[column],time) 是墙上的一个显示位置。
+    // x/y和traceIndexes则告诉我们这个值实际取自哪条原始道。
+    // amplitudes按列优先排列；负振幅和0保留，NaN表示缺失。
+    std::cout << "columns=" << result.columns << " samples=" << result.samples
+              << " bends=" << result.vertexColumns.size() << '\n';
+    for (size_t vertex = 0; vertex < result.vertexColumns.size(); ++vertex) {
+        const int column = result.vertexColumns[vertex];
+        std::cout << "vertex " << vertex << " column=" << column
+                  << " XY=" << result.pathX[column] << ',' << result.pathY[column]
+                  << " distance=" << result.distances[column] << '\n';
+    }
+    // 每列第sample个时间：firstTime + sample * sampleInterval。
+    // 使用pathX/pathY/时间轴构造三维墙；使用distances/时间轴展开为二维图。
+)PDS").arg(number(request.first),number(request.last),request.fullResolution?"true":"false");
+    }
     else code+=QString::fromUtf8(R"PDS(    // 第 4 步：指定地震体和切片时间，时间单位取自该体的元信息。
     const long long volumeId = %1;
     const double requestedTime = %2;
     TimeSliceReadOptions options;
-    options.maxInlineCount = 256;    // 最多 256 个纵测线位置
-    options.maxCrosslineCount = 256; // 最多 256 个横测线位置
-    options.maxValues = 65536;       // 振幅值数量上限
+    options.maxInlineCount = 256;    // 仅预览模式：最多256个纵测线位置
+    options.maxCrosslineCount = 256; // 仅预览模式：最多256个横测线位置
+    options.fullResolution = %3;    // true使用完整原网格；false使用上面预览上限
+    options.maxValues = 64000000;    // 超限报错，不偷偷抽样
 
     // 第 5 步：读取水平切片，result 接收真实坐标、测线编号和振幅。
     SeismicTimeSliceResult result;
@@ -889,10 +978,10 @@ int main(int argc, char** argv) {
     }
     // 实际测线编号存在 inlineNumbers/crosslineNumbers 中，不等于 row/column。
     // 用整个 amplitudes 数组画图；JSON 只是本页查看结果的一种表示方式。
-)PDS").arg(request.resourceId).arg(number(request.first));
+)PDS").arg(request.resourceId).arg(number(request.first)).arg(request.fullResolution?"true":"false");
     code+=QStringLiteral("    return 0;\n}\n");code_->setPlainText(code);
 }
-void ApiDemoWidget::setBusy(bool busy){example_->setEnabled(!busy);well_->setEnabled(!busy);resource_->setEnabled(!busy);first_->setEnabled(!busy);last_->setEnabled(!busy);processed_->setEnabled(!busy);refresh_->setEnabled(!busy);run_->setEnabled(!busy&&(example_->currentData().toString()=="wells"||resource_->count()>0)&&!projectPath_.isEmpty());cancel_->setVisible(busy);cancel_->setEnabled(busy);setProperty("apiRunState",busy?"running":"idle");emit busyChanged(busy);}
+void ApiDemoWidget::setBusy(bool busy){const auto kind=example_->currentData().toString();example_->setEnabled(!busy);well_->setEnabled(!busy);resource_->setEnabled(!busy);first_->setEnabled(!busy);last_->setEnabled(!busy&&(!(nativeLine(kind)||kind=="seismic_slice")||!fullResolution_->isChecked()));processed_->setEnabled(!busy);fullResolution_->setEnabled(!busy);pathPoints_->setEnabled(!busy);refresh_->setEnabled(!busy);run_->setEnabled(!busy&&(kind=="wells"||resource_->count()>0)&&!projectPath_.isEmpty());cancel_->setVisible(busy);cancel_->setEnabled(busy);setProperty("apiRunState",busy?"running":"idle");emit busyChanged(busy);}
 void ApiDemoWidget::runExample(){
     if(isRunning())return;Request request;QString error;if(!requestValues(request,error)){invalidateResult();status_->setText(error);emit runFinished(false);return;}
     invalidateResult();updateCode();cancelRequested_=false;status_->setText(QStringLiteral("正在执行公开 C++ 服务接口，完成后用同一返回对象绘图…"));codeTabs_->setCurrentIndex(1);
@@ -928,7 +1017,7 @@ void ApiDemoWidget::runExample(){
                             if(count<1||step<1){result->ok=false;result->error="无法自动选择规则网格的中间线，请查看文件检查结果。";}else result->actualLineNumber=first+(count/2)*step;
                         }
                     }
-                    SectionReadOptions options;options.maxColumns=std::isfinite(request.last)?int(request.last):512;options.maxValues=2000000;
+                    SectionReadOptions options;options.maxColumns=std::isfinite(request.last)?int(request.last):512;options.maxValues=64000000;options.fullResolution=request.fullResolution;
                     if(result->ok)result->ok=service.readSeismicLine(request.resourceId,direction,result->actualLineNumber,options,result->section,result->error,[cancel]{return cancel->load();});
                     if(result->ok&&request.kind=="processed_section"){
                         result->ok=service.seismicStatistics(result->section.amplitudes,result->rawStatistics,result->error,[cancel]{return cancel->load();});
@@ -944,13 +1033,18 @@ void ApiDemoWidget::runExample(){
                         result->ok=service.inspectSeismic(request.resourceId,result->seismicInfo,result->error,[cancel]{return cancel->load();});
                         if(result->ok)result->requestedTime=result->seismicInfo.firstTime+(result->seismicInfo.sampleCount/2)*result->seismicInfo.sampleInterval;
                     }
-                    TimeSliceReadOptions options;options.maxInlineCount=options.maxCrosslineCount=std::isfinite(request.last)?int(request.last):128;options.maxValues=static_cast<long long>(options.maxInlineCount)*options.maxCrosslineCount;
+                    TimeSliceReadOptions options;options.maxInlineCount=options.maxCrosslineCount=std::isfinite(request.last)?int(request.last):128;options.maxValues=64000000;options.fullResolution=request.fullResolution;
                     if(result->ok)result->ok=service.readSeismicTimeSlice(request.resourceId,result->requestedTime,options,result->slice,result->error,[cancel]{return cancel->load();});
                 }else if(request.kind=="section"){
-                    SectionReadOptions options;options.firstTime=request.first;options.lastTime=request.last;options.maxColumns=512;options.maxValues=2000000;
+                    SectionReadOptions options;options.firstTime=request.first;options.lastTime=request.last;options.maxColumns=512;options.maxValues=64000000;options.fullResolution=request.fullResolution;
                     result->ok=service.extractSection(request.resourceId,options,result->section,result->error,[cancel]{return cancel->load();});
+                }else if(request.kind=="wall"){
+                    SeismicVolume volume;result->ok=service.readVolume(request.resourceId,volume,result->error);
+                    if(result->ok){SeismicSection path;path.sectionName="Coordinate wall";path.parentVolumeId=volume.volumeId;path.coordinateSystem=volume.geometry.coordinateSystem;path.coordinateUnit=volume.geometry.coordinateUnit;path.pathPoints=request.pathPoints;
+                        SectionReadOptions options;options.firstTime=request.first;options.lastTime=request.last;options.maxColumns=512;options.maxValues=64000000;options.fullResolution=request.fullResolution;
+                        result->ok=service.extractSection(path,options,result->section,result->error,[cancel]{return cancel->load();});}
                 }else{
-                    TimeSliceReadOptions options;options.maxInlineCount=256;options.maxCrosslineCount=256;options.maxValues=65536;
+                    TimeSliceReadOptions options;options.maxInlineCount=256;options.maxCrosslineCount=256;options.maxValues=64000000;options.fullResolution=request.fullResolution;
                     result->ok=service.readTimeSlice(request.resourceId,request.first,options,result->slice,result->error,[cancel]{return cancel->load();});
                 }
             }
@@ -963,7 +1057,7 @@ void ApiDemoWidget::runExample(){
 void ApiDemoWidget::showResult(const Request& request,const Result& result){
     succeeded_=result.ok;setProperty("apiLastSucceeded",result.ok);
     QJsonObject object{{"ok",result.ok},{"error",q(result.error)},{"elapsedMs",double(result.milliseconds)},{"project",request.project},{"previewLimit",10},{"nonFiniteNumbers","null (C++ NaN/Infinity)"}};
-    const QString method=request.kind=="wells"?"listWells":request.kind=="curve"?"listData + readCurveSlice":request.kind=="intervals"?"readIntervalTrackInfo + readIntervals":request.kind=="time_depth"?"readTimeDepth":request.kind=="section"?"extractSection":request.kind=="seismic_info"?"inspectSeismic":request.kind=="seismic_trace"?"readSeismicTrace":request.kind=="processed_section"?"readSeismicLine + processSeismicSection":nativeLine(request.kind)?"readSeismicLine":request.kind=="seismic_slice"?"readSeismicTimeSlice":"readTimeSlice";object["method"]=method;
+    const QString method=request.kind=="wells"?"listWells":request.kind=="curve"?"listData + readCurveSlice":request.kind=="intervals"?"readIntervalTrackInfo + readIntervals":request.kind=="time_depth"?"readTimeDepth":request.kind=="section"||request.kind=="wall"?"extractSection":request.kind=="seismic_info"?"inspectSeismic":request.kind=="seismic_trace"?"readSeismicTrace":request.kind=="processed_section"?"readSeismicLine + processSeismicSection":nativeLine(request.kind)?"readSeismicLine":request.kind=="seismic_slice"?"readSeismicTimeSlice":"readTimeSlice";object["method"]=method;
     if(!result.ok){json_->setPlainText(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented)));resultTabs_->setCurrentIndex(1);status_->setText(QStringLiteral("调用失败：")+q(result.error));return;}
     QJsonArray preview;
     auto statisticsJson=[](const SeismicStatistics& statistics){return QJsonObject{{"finiteCount",statistics.finiteCount},{"missingCount",statistics.missingCount},{"minimum",numeric(statistics.minimum)},{"maximum",numeric(statistics.maximum)},{"mean",numeric(statistics.mean)},{"rms",numeric(statistics.rms)}};};
@@ -1031,9 +1125,12 @@ void ApiDemoWidget::showResult(const Request& request,const Result& result){
     }else if(request.kind=="seismic_trace"){
         const auto& trace=result.trace;for(size_t i=0;i<std::min<size_t>(10,trace.amplitudes.size());++i)preview.append(QJsonObject{{"sample",double(i)},{"time",numeric(trace.firstTime+i*trace.sampleInterval)},{"amplitude",numeric(trace.amplitudes[i])}});
         object["returnType"]="SeismicTraceResult";object["volumeId"]=request.resourceId;object["traceIndex"]=trace.traceIndex;object["traceNumber"]=trace.traceNumber;object["inlineNumber"]=trace.inlineNumber;object["crosslineNumber"]=trace.crosslineNumber;object["x"]=numeric(trace.x);object["y"]=numeric(trace.y);object["firstTime"]=numeric(trace.firstTime);object["sampleInterval"]=numeric(trace.sampleInterval);object["timeUnit"]=q(trace.timeUnit);object["amplitudeCount"]=double(trace.amplitudes.size());object["statistics"]=statisticsJson(result.statistics);object["preview"]=preview;object["previewTruncated"]=trace.amplitudes.size()>10;tracePlot_->setTrace(trace);visuals_->setCurrentIndex(3);
-    }else if(request.kind=="section"||nativeLine(request.kind)){
+    }else if(request.kind=="section"||request.kind=="wall"||nativeLine(request.kind)){
         const auto& s=result.section;for(size_t i=0;i<std::min<size_t>(10,s.amplitudes.size());++i){size_t column=s.samples>0?i/size_t(s.samples):0;size_t sample=s.samples>0?i%size_t(s.samples):0;preview.append(QJsonObject{{"column",double(column)},{"sample",double(sample)},{"x",column<s.x.size()?numeric(s.x[column]):QJsonValue(QJsonValue::Null)},{"y",column<s.y.size()?numeric(s.y[column]):QJsonValue(QJsonValue::Null)},{"time",numeric(s.firstTime+double(sample)*s.sampleInterval)},{"amplitude",numeric(s.amplitudes[i])}});}
         object["returnType"]="SeismicSectionResult";object["sectionId"]=double(request.resourceId);object["columns"]=s.columns;object["samples"]=s.samples;object["firstTime"]=numeric(s.firstTime);object["sampleInterval"]=numeric(s.sampleInterval);object["timeUnit"]=q(s.timeUnit);object["amplitudeCount"]=double(s.amplitudes.size());object["layout"]="column-major: column * samples + sample";object["preview"]=preview;object["previewTruncated"]=s.amplitudes.size()>10;image_->setSection(s);visuals_->setCurrentIndex(2);
+        object["fullResolutionRequested"]=request.fullResolution;object["nativeColumns"]=s.nativeColumns;object["decimated"]=s.decimated;
+        QJsonArray vertices;for(int column:s.vertexColumns){QJsonObject vertex{{"column",column}};if(column>=0&&size_t(column)<s.pathX.size()){vertex["x"]=numeric(s.pathX[column]);vertex["y"]=numeric(s.pathY[column]);vertex["distance"]=numeric(s.distances[column]);}vertices.append(vertex);}object["pathVertices"]=vertices;
+        if(request.kind=="wall"){object.remove("sectionId");object["volumeId"]=request.resourceId;object["inputPointCount"]=int(request.pathPoints.size());object["pathSaved"]=false;image_->setWallMode(true);}
         if(nativeLine(request.kind)){
             object.remove("sectionId");object["volumeId"]=request.resourceId;object["direction"]=request.kind=="crossline"?"crossline":"inline";object["lineNumber"]=result.actualLineNumber;object["statistics"]=statisticsJson(result.statistics);
             QJsonArray columns;for(size_t i=0;i<std::min<size_t>(10,s.traceIndexes.size());++i)columns.append(QJsonObject{{"column",double(i)},{"traceIndex",s.traceIndexes[i]},{"inline",i<s.inlineNumbers.size()?QJsonValue(s.inlineNumbers[i]):QJsonValue(QJsonValue::Null)},{"crossline",i<s.crosslineNumbers.size()?QJsonValue(s.crosslineNumbers[i]):QJsonValue(QJsonValue::Null)}});object["columnPreview"]=columns;
@@ -1043,9 +1140,12 @@ void ApiDemoWidget::showResult(const Request& request,const Result& result){
         const auto& s=result.slice;const size_t width=s.crosslineNumbers.size();
         for(size_t i=0;i<std::min<size_t>(10,s.amplitudes.size());++i){size_t row=width?i/width:0,col=width?i%width:0;preview.append(QJsonObject{{"inline",row<s.inlineNumbers.size()?QJsonValue(s.inlineNumbers[row]):QJsonValue(QJsonValue::Null)},{"crossline",col<s.crosslineNumbers.size()?QJsonValue(s.crosslineNumbers[col]):QJsonValue(QJsonValue::Null)},{"x",i<s.x.size()?numeric(s.x[i]):QJsonValue(QJsonValue::Null)},{"y",i<s.y.size()?numeric(s.y[i]):QJsonValue(QJsonValue::Null)},{"amplitude",numeric(s.amplitudes[i])}});}
         object["returnType"]="SeismicTimeSliceResult";object["volumeId"]=double(request.resourceId);object["inlineCount"]=double(s.inlineNumbers.size());object["crosslineCount"]=double(s.crosslineNumbers.size());object["requestedTime"]=numeric(request.first);object["actualTime"]=numeric(s.actualTime);object["timeUnit"]=q(s.timeUnit);object["amplitudeCount"]=double(s.amplitudes.size());object["layout"]="row-major: inlineIndex * crosslineCount + crosslineIndex";object["preview"]=preview;object["previewTruncated"]=s.amplitudes.size()>10;image_->setTimeSlice(s);visuals_->setCurrentIndex(2);
+        object["fullResolutionRequested"]=request.fullResolution;object["nativeInlineCount"]=s.nativeInlineCount;object["nativeCrosslineCount"]=s.nativeCrosslineCount;object["decimated"]=s.decimated;
         if(request.kind=="seismic_slice")object["requestedTime"]=numeric(result.requestedTime);
     }
     json_->setPlainText(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Indented)));resultTabs_->setCurrentIndex(0);
     const bool tabular=request.kind=="intervals"||request.kind=="time_depth";
     status_->setText(tabular?QStringLiteral("%1 调用成功 · %2 ms · 完整结果已返回，表格显示前 200 行，JSON 显示前 10 项。").arg(method).arg(result.milliseconds):QStringLiteral("%1 调用成功 · %2 ms · 图形来自同一次返回对象；JSON 页显示字段与前 10 项摘要。").arg(method).arg(result.milliseconds));
+    if(request.kind=="wall"||request.kind=="section"||nativeLine(request.kind))status_->setText(QStringLiteral("已返回 %1 道 × %2 样点 · %3 · %4 ms。右键可1:1查看、切换剖面墙并导出原尺寸图像。").arg(result.section.columns).arg(result.section.samples).arg(result.section.decimated?QStringLiteral("抽样预览"):QStringLiteral("原生精度")).arg(result.milliseconds));
+    else if(request.kind=="slice"||request.kind=="seismic_slice")status_->setText(QStringLiteral("已返回 %1 × %2 网格 · %3 · %4 ms。窗口适配会缩小显示；1:1查看或导出可以保留全部像素。").arg(result.slice.crosslineNumbers.size()).arg(result.slice.inlineNumbers.size()).arg(result.slice.decimated?QStringLiteral("抽样预览"):QStringLiteral("原始分辨率")).arg(result.milliseconds));
 }

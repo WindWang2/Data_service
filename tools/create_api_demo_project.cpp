@@ -243,11 +243,14 @@ int main(int argc, char** argv) {
         require(curve.values.size() == 301 && curve.values.front() < 0,
                 "Legitimate negative synthetic SP was lost");
         SectionReadOptions sectionOptions;
+        sectionOptions.fullResolution = true;
         sectionOptions.maxColumns = 64;
         sectionOptions.maxValues = 64 * SampleCount;
         SeismicSectionResult sectionResult;
         require(service.extractSection(sectionId, sectionOptions, sectionResult, error), error);
-        require(sectionResult.columns == 64 && sectionResult.samples == SampleCount
+        require(sectionResult.columns > 1 && sectionResult.columns == sectionResult.nativeColumns
+                && !sectionResult.decimated && sectionResult.samples == SampleCount
+                && sectionResult.vertexColumns == std::vector<int>({0,sectionResult.columns-1})
                 && std::all_of(sectionResult.amplitudes.begin(), sectionResult.amplitudes.end(),
                     [](float value) { return std::isfinite(value); }),
                 "Synthetic section shape or values incorrect");

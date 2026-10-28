@@ -39,6 +39,18 @@ int main() {
         options.gain = std::numeric_limits<double>::max();
         check(!service.processSeismicTrace(raw, options, out, error) && out.amplitudes.empty(), "overflow reported without partial output");
         check(!service.seismicStatistics(raw.amplitudes, stats, error, [] { return true; }) && stats.finiteCount == 0, "cancel statistics");
+        // 高清矩阵超过旧的 800 万阈值仍可处理，不能只提高读取上限。
+        section = {};section.columns=4001;section.samples=2000;
+        section.amplitudes.assign(size_t(section.columns)*section.samples,-2.0f);
+        section.pathX.resize(section.columns,10);section.pathY.resize(section.columns,20);
+        section.distances.resize(section.columns,0);section.vertexColumns={0,4000};section.nativeColumns=4001;
+        options={};options.gain=2;
+        check(service.processSeismicSection(section,options,processed,error),error);
+        check(processed.amplitudes.back()==-4 && section.amplitudes.back()==-2 && processed.vertexColumns==section.vertexColumns,
+              "HD values and wall geometry preserved");
+        check(service.seismicStatistics(processed.amplitudes,stats,error) && stats.finiteCount==8002000 && stats.mean==-4,"HD statistics");
+        section.vertexColumns.push_back(4001);
+        check(!service.processSeismicSection(section,options,processed,error) && processed.amplitudes.empty(),"invalid wall vertex rejected");
         std::cout << "Seismic processing checks passed\n"; return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

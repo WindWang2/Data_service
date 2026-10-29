@@ -16,6 +16,12 @@
 #include <atomic>
 #include <deque>
 #include <future>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace paleo::data {
 using namespace detail;
@@ -76,6 +82,15 @@ struct PreparedImport {
     std::string error;
     long long hashMs=0,parseMs=0,hashedBytes=0;
 };
+#ifdef _WIN32
+static void assignParsedFile(ParsedFile* destination,const std::string* path,const ParseOptions* options,const CancelCheck* cancelled){
+    *destination=parseFile(*path,*options,*cancelled);
+}
+static int parseFileGuarded(ParsedFile* destination,const std::string* path,const ParseOptions* options,const CancelCheck* cancelled){
+    __try{assignParsedFile(destination,path,options,cancelled);return 1;}
+    __except(EXCEPTION_EXECUTE_HANDLER){return 0;}
+}
+#endif
 static PreparedImport prepareImport(const QString& path,const ImportOptions& options,
     const std::vector<KnownSource>& known,const CancelCheck& cancelled,
     const std::function<void(const std::string&)>& phase){
@@ -92,7 +107,21 @@ static PreparedImport prepareImport(const QString& path,const ImportOptions& opt
     phase("解析");
     {
         MeasureTime measure(out.parseMs);
-        try{auto parsing=options.parsing;parsing.sourceContextPath=s(path);out.parsed=parseFile(s(path),parsing,cancelled);}
+        try{
+            auto parsing=options.parsing;parsing.sourceContextPath=s(path);
+            const auto source=s(path);
+#ifdef _WIN32
+            // One corrupt file used to abort the whole process inside ParsedFile assignment.
+            // Keep the project open and record the file as failed instead.
+            auto* slot=new ParsedFile;
+            if(!parseFileGuarded(slot,&source,&parsing,&cancelled)){
+                out.parsed.path=source;out.parsed.status="failed";
+                out.parsed.message="解析该文件时发生内部错误，已跳过，其余文件继续导入";
+            }else{out.parsed=std::move(*slot);delete slot;}
+#else
+            out.parsed=parseFile(source,parsing,cancelled);
+#endif
+        }
         catch(const std::exception& ex){out.parsed.path=s(path);out.parsed.status="failed";out.parsed.message=ex.what();}
         out.hasParsed=true;
     }

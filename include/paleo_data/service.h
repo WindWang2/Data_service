@@ -192,6 +192,9 @@ public:
     void closeProject();
     std::string projectPath() const;
     std::string projectName() const;
+    std::string projectCrs() const;
+    std::string projectCrsUnit() const;
+    bool setProjectCrs(const std::string& epsg, const std::string& unit, std::string& e);
     bool importDirectory(const std::string& directory, const ImportOptions& options, ImportReport& result, std::string& error, const ProgressCallback& progress={}, const CancelCheck& cancelled={});
     bool importFile(const std::string& path, const ImportOptions& options, ImportReport& result, std::string& error, const CancelCheck& cancelled={});
     // Persist a host-prepared, normalized model without reparsing or copying.

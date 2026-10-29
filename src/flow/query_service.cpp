@@ -19,6 +19,14 @@ bool DataService::isReadOnly()const{return impl_->store.readOnly;}
 void DataService::closeProject(){impl_->store.close();}
 std::string DataService::projectPath()const{return s(impl_->store.root);}
 std::string DataService::projectName()const{return s(impl_->store.name);}
+std::string DataService::projectCrs()const{QSqlQuery r;std::string e;if(!impl_->store.exec("SELECT value FROM ds_meta WHERE key='project_crs'",{},e,&r)||!r.next())return {};return s(r.value(0).toString());}
+std::string DataService::projectCrsUnit()const{QSqlQuery r;std::string e;if(!impl_->store.exec("SELECT value FROM ds_meta WHERE key='project_crs_unit'",{},e,&r)||!r.next())return {};return s(r.value(0).toString());}
+bool DataService::setProjectCrs(const std::string& epsg,const std::string& unit,std::string& e){
+    if(impl_->store.readOnly){e="只读工区不能修改坐标系";return false;}
+    const auto code=q(epsg).trimmed().toUpper();bool digits=false;const auto number=code.mid(5).toLongLong(&digits);
+    if(!code.startsWith("EPSG:")||!digits||number<=0){e="坐标系须采用 EPSG:<数字> 格式";return false;}
+    return impl_->store.exec("INSERT OR REPLACE INTO ds_meta(key,value) VALUES('project_crs',?),('project_crs_unit',?)",{code,q(unit).trimmed()},e);
+}
 bool DataService::listWells(std::vector<WellSummary>& out,std::string& e)const{
     out.clear();QSqlQuery r;if(!impl_->store.exec("SELECT w.id,w.name,(SELECT count(*) FROM log_sets WHERE well_id=w.id),(SELECT count(*) FROM curves c JOIN log_sets l ON l.id=c.set_id WHERE l.well_id=w.id),(SELECT count(*) FROM tracks WHERE well_id=w.id),(SELECT count(*) FROM samples a JOIN sample_tables t ON t.id=a.table_id WHERE t.well_id=w.id),(SELECT count(*) FROM well_objects WHERE well_id=w.id AND kind='time_depth'),(SELECT count(*) FROM well_objects WHERE well_id=w.id AND kind='trajectories'),(w.x IS NOT NULL AND w.y IS NOT NULL),(SELECT coalesce(sum(json_array_length(payload)),0) FROM well_objects WHERE well_id=w.id AND kind='core_photos'),(SELECT count(*) FROM well_objects WHERE well_id=w.id AND kind='attachments'),(SELECT count(*) FROM well_objects WHERE well_id=w.id AND kind='markers') FROM wells w ORDER BY name",{},e,&r))return false;
     while(r.next())out.push_back({r.value(0).toLongLong(),s(r.value(1).toString()),r.value(2).toInt(),r.value(3).toInt(),r.value(4).toInt(),r.value(5).toInt(),r.value(6).toInt(),r.value(7).toInt(),r.value(8).toBool(),r.value(9).toInt(),r.value(10).toInt(),r.value(11).toInt()});return true;

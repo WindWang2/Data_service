@@ -1,6 +1,7 @@
 #pragma once
 #include "parser.h"
 #include "seismic.h"
+#include "graph.h"
 #include <memory>
 #include <cstdint>
 
@@ -241,6 +242,16 @@ public:
     bool deleteData(const std::string& kind, long long id, std::string& error); // DB records only; external files never deleted
     bool listSources(std::vector<SourceEntry>& result, std::string& error) const;
     bool listSourceIndexEntries(std::vector<SourceIndexEntry>& result, std::string& error) const;
+    // Relations are directed from sourceId to targetSourceId. Repeating the same
+    // relation updates its note and returns the existing stable relation ID.
+    bool relateSources(long long sourceId, long long targetSourceId, const std::string& relation,
+                       const std::string& note, long long& relationId, std::string& error);
+    bool removeSourceRelation(long long relationId, std::string& error);
+    bool listSourceRelations(std::vector<SourceRelation>& result, std::string& error) const;
+    // Build on demand from registered files and explicit stored/manual relations.
+    // No filename/folder inference, file reparse, layout or rendering is performed.
+    bool buildFileGraph(const FileGraphOptions& options, FileGraph& result, std::string& error,
+                        const CancelCheck& cancelled={}) const;
     bool listIssues(bool unresolvedOnly, std::vector<IssueEntry>& result, std::string& error) const;
     bool resolveIssue(long long issueId, const std::string& resolution, std::string& error);
     bool reimportSource(long long sourceId, const ParseOptions& correctedMapping, ImportReport& result, std::string& error, const CancelCheck& cancelled={});

@@ -62,6 +62,20 @@ static bool ensureImportPerformanceSchema(ProjectStore& st,std::string& error){
     for(const auto& sql:statements)if(!st.exec(sql,{},error)){st.rollback();return false;}
     if(!st.commit(error)){st.rollback();return false;}return true;
 }
+static bool ensureFileGraphSchema(ProjectStore& st,std::string& error){
+    QSqlQuery existing;
+    if(!st.exec("SELECT value FROM ds_meta WHERE key='file_graph_schema'",{},error,&existing))return false;
+    if(existing.next()&&existing.value(0).toString()=="1")return true;
+    existing.finish();
+    if(!st.begin(error))return false;
+    const QStringList statements={
+        "CREATE TABLE IF NOT EXISTS source_relations(id INTEGER PRIMARY KEY AUTOINCREMENT,source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,target_source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,relation TEXT NOT NULL,note TEXT NOT NULL DEFAULT '',created TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(source_id,target_source_id,relation),CHECK(source_id<>target_source_id))",
+        "CREATE INDEX IF NOT EXISTS source_relations_target ON source_relations(target_source_id)",
+        "INSERT OR REPLACE INTO ds_meta(key,value) VALUES('file_graph_schema','1')"
+    };
+    for(const auto& sql:statements)if(!st.exec(sql,{},error)){st.rollback();return false;}
+    if(!st.commit(error)){st.rollback();return false;}return true;
+}
 bool ProjectStore::open(const QString& directory,bool create,const QString& projectName,std::string& error,bool readonly){
     close();error.clear();QDir dir(directory);if(create){if(QFileInfo::exists(dir.filePath("data.sqlite"))){error="该目录已有工区，请使用打开工区";return false;}if(!dir.mkpath(".")){error="无法创建工区目录";return false;}}
     if(!create&&!QFileInfo::exists(dir.filePath("data.sqlite"))){error="目录中没有 data.sqlite";return false;}
@@ -83,7 +97,7 @@ bool ProjectStore::open(const QString& directory,bool create,const QString& proj
             while(r.next())if(r.value(1).toString()=="sheet")hasSheet=true;r.finish();
             if((!hasSheet&&!exec("ALTER TABLE log_sets ADD COLUMN sheet TEXT DEFAULT ''",{},error))||!commit(error)){rollback();return false;}
         }
-        return ensureImportPerformanceSchema(*this,error);
+        if(!ensureImportPerformanceSchema(*this,error))return false;return ensureFileGraphSchema(*this,error);
     }
     const QString schema=QString::fromUtf8(R"SQL(
 CREATE TABLE ds_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -113,7 +127,7 @@ CREATE TABLE source_cells(table_id INTEGER REFERENCES source_tables(id) ON DELET
 CREATE TABLE changes(id INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT,entity_id INTEGER,description TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP);
 )SQL");
     if(!begin(error))return false;for(auto statement:schema.split(';',Qt::SkipEmptyParts)){statement=statement.trimmed();if(statement.isEmpty())continue;if(!exec(statement,{},error)){rollback();return false;}}
-    if(!exec("INSERT INTO ds_meta VALUES('schema_version','1'),('project_name',?)",{projectName},error)||!commit(error)){rollback();return false;}name=projectName;dir.mkpath("sources");dir.mkpath("images");dir.mkpath("exports");return ensureImportPerformanceSchema(*this,error);
+    if(!exec("INSERT INTO ds_meta VALUES('schema_version','1'),('project_name',?)",{projectName},error)||!commit(error)){rollback();return false;}name=projectName;dir.mkpath("sources");dir.mkpath("images");dir.mkpath("exports");if(!ensureImportPerformanceSchema(*this,error))return false;return ensureFileGraphSchema(*this,error);
 }
 bool ProjectStore::ensureWell(const WellInfo& w,long long& id,std::string& e){
     if(w.wellName.empty()){e="井名为空，不能保存";return false;}QSqlQuery r;

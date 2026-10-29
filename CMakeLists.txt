@@ -83,6 +83,11 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/service_tests.cpp")
   target_link_libraries(service_tests PRIVATE paleo_data_service Qt6::Core)
   add_test(NAME service_contract COMMAND service_tests)
 endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/file_graph_tests.cpp")
+  add_executable(file_graph_tests tests/file_graph_tests.cpp)
+  target_link_libraries(file_graph_tests PRIVATE paleo_data_service Qt6::Core Qt6::Sql)
+  add_test(NAME file_graph_contract COMMAND file_graph_tests)
+endif()
 endif() # PDS_BUILD_TESTS
 
 if(PDS_INSTALL)

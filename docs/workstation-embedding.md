@@ -76,3 +76,25 @@ VACUUM INTO 创建包含已提交 WAL 的一致数据库副本；目标必须不
 只有“测井曲线／离散曲线”工作表且首四列严格为“井号、深度、TVD、TVDSS”时
 使用 MD／米；其他表格的深度类型及单位继续保持未知。默认关闭此宿主约定，
 不改变独立服务对普通 SpreadsheetML 的保守解析；显式 depthUnit 优先。
+
+## 文件关联与图谱接口
+
+`paleo_data/graph.h` 定义渲染无关的 `FileGraphNode`、`FileGraphEdge` 和
+`SourceRelation`。宿主调用 `DataService::buildFileGraph` 按需取得同一 SQLite
+读取快照中的图，不需要重新扫描或解析文件，也不需要维护第二份图数据库。
+节点 ID 在工区内稳定，文件使用 `file:<sourceId>`；节点保留来源路径、存储路径、
+SHA-256、状态和原始类别，宿主可据此选择交互和渲染方式。
+
+默认图包含已登记文件及显式业务对象。`contains` 连接文件与其对象，
+`belongs_to` 连接井对象与井，`references` 连接层位与已确认的所属地震体。
+不会根据文件名、目录或坐标相似度猜测关系。将 `FileGraphOptions.includeObjects`
+设为 false 可只取文件图；非活动来源默认排除，节点和边预算可防止超大结果。
+接口支持只读会话和取消；失败时结果保持为空。
+
+`relateSources` 保存用户确认的有向文件关系，重复保存同一来源、目标和关系类型
+只更新说明并保留稳定关系 ID；`listSourceRelations` 和 `removeSourceRelation`
+用于管理这些记录。图边通过 `basis` 区分 `stored` 业务投影与 `manual` 人工关系。
+数据服务不分配布局坐标、不渲染图谱；可视化和交互由宿主负责。
+
+旧工区在可写打开时增量增加 `source_relations` 表，保留原 schema_version 和已有
+ID。只读打开不升级；旧格式仍可构建业务关系图，人工关系视为空。

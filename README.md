@@ -43,7 +43,7 @@ Windows 也可在 MSVC x64 开发终端运行 `build.ps1`，通过 `-QtRoot`、`
 
 旧式 `.xls` 读取动态使用 FreeXL。维护的源码在 `vendor/freexl`，Windows 构建说明见其 `NOTICE.txt` 和构建脚本；运行时还需对应的 libiconv 库。`.xlsx` 使用本项目的 ZIP/XML 解析器。这里给出标准 CMake 构建方法，不宣称所有系统或工具链均已验证。
 
-当前源码已在 Windows x64 Release 环境独立构建：17 项合成回归测试通过，安装后的 SDK 可编译全部十一个入门案例。验证过程不依赖随仓库发布的数据文件。
+源码可在 Windows x64 Release 环境独立构建并运行合成回归测试；安装后的 SDK 可编译全部十一个入门案例。验证过程不依赖随仓库发布的数据文件。
 
 ## 不带真实资料的演示
 

@@ -40,14 +40,14 @@ QString rangeAddress(int row, int firstColumn, int lastColumn) {
 bool numeric(QString text, double& result) {
     text=text.trimmed();
     if(text.endsWith('%')) text.chop(1);
-    static const QRegularExpression valid(QStringLiteral("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"));
+    thread_local const QRegularExpression valid(QStringLiteral("^[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"));
     if(!valid.match(text).hasMatch()) return false;
     bool ok=false; result=text.toDouble(&ok);
     return ok && std::isfinite(result);
 }
 bool depthRange(QString text, double& top, double& bottom) {
     text=text.trimmed();
-    static const QRegularExpression re(QStringLiteral("^([0-9]+(?:\\.[0-9]+)?)\\s*(?:[-~～—–至]\\s*([0-9]+(?:\\.[0-9]+)?))?\\s*(?:m|米)?$"),QRegularExpression::CaseInsensitiveOption);
+    thread_local const QRegularExpression re(QStringLiteral("^([0-9]+(?:\\.[0-9]+)?)\\s*(?:[-~～—–至]\\s*([0-9]+(?:\\.[0-9]+)?))?\\s*(?:m|米)?$"),QRegularExpression::CaseInsensitiveOption);
     const auto m=re.match(text);
     if(!m.hasMatch()) return false;
     top=m.captured(1).toDouble(); bottom=m.captured(2).isEmpty()?top:m.captured(2).toDouble();
@@ -55,7 +55,7 @@ bool depthRange(QString text, double& top, double& bottom) {
 }
 QSet<QString> wellNames(const QString& value) {
     // Development-well suffixes such as B1, A5P1 and A8ST3P are part of the ID.
-    static const QRegularExpression re(QStringLiteral("(?<![A-Z0-9])(?:HZ|XJ|LF|PY|LH|WC|EP|BY)[-_ ]?[0-9]+[-_][0-9]+[A-Z]*(?:[-_][A-Z]*[0-9]+[A-Z0-9]*| +[A-Z]+[0-9]+[A-Z0-9]*)"),QRegularExpression::CaseInsensitiveOption);
+    thread_local const QRegularExpression re(QStringLiteral("(?<![A-Z0-9])(?:HZ|XJ|LF|PY|LH|WC|EP|BY)[-_ ]?[0-9]+[-_][0-9]+[A-Z]*(?:[-_][A-Z]*[0-9]+[A-Z0-9]*| +[A-Z]+[0-9]+[A-Z0-9]*)"),QRegularExpression::CaseInsensitiveOption);
     QSet<QString> names;
     auto matches=re.globalMatch(value);
     while(matches.hasNext()) {auto name=matches.next().captured().toUpper().replace('_','-');name.replace(QRegularExpression("(?<=[0-9]) +(?=[A-Z])"),"-");names.insert(name.remove(' '));}
@@ -121,7 +121,7 @@ bool xmlOkay(QXmlStreamReader& xml,QString& error) {
     return true;
 }
 bool address(const QString& value,int& row,int& col) {
-    static const QRegularExpression re("^([A-Za-z]+)([1-9][0-9]*)$");
+    thread_local const QRegularExpression re("^([A-Za-z]+)([1-9][0-9]*)$");
     const auto m=re.match(value);if(!m.hasMatch())return false;
     col=0;for(auto c:m.captured(1).toUpper()) {col=col*26+c.unicode()-u'A'+1;if(col>16384)return false;}
     bool ok=false;row=m.captured(2).toInt(&ok);return ok&&row<=1048576;

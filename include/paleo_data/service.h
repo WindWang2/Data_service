@@ -82,6 +82,27 @@ struct WellFeatureTable {
     std::vector<FeatureColumn> columns;
 };
 struct IntervalTrackResult { long long trackId=0,wellId=0; std::string name; DepthInfo depthInfo; std::vector<IntervalRecord> intervals; };
+// Plot input keeps groups, source IDs and conventions separate. No file reparse,
+// interpolation, implicit CRS inheritance or coordinate transformation is performed.
+struct ProjectCoordinates { std::string coordinateSystem, coordinateUnit; };
+struct WellPlotLog { DataEntry entry; LogSet value; };
+struct WellPlotIntervals { DataEntry entry; IntervalTrack value; };
+struct WellPlotMarkers { DataEntry entry; MarkerTrack value; };
+struct WellPlotPhotos { DataEntry entry; CorePhotoTrack value; };
+struct WellPlotData {
+    long long wellId=0;
+    WellInfo well;
+    ProjectCoordinates projectCoordinates;
+    DepthInfo defaultDepthInfo;
+    std::vector<WellPlotLog> logs;
+    std::vector<WellPlotIntervals> intervals;
+    std::vector<WellPlotMarkers> markers;
+    std::vector<WellPlotPhotos> photos;
+};
+struct WellPlotOptions {
+    bool processed=true;
+    long long maxValues=8000000; // Preflight sample/interval budget, 1..64000000.
+};
 struct ImportOptions {
     ParseOptions parsing;
     bool copySources=true;
@@ -196,6 +217,14 @@ public:
     std::string projectCrs() const;
     std::string projectCrsUnit() const;
     bool setProjectCrs(const std::string& epsg, const std::string& unit, std::string& e);
+    bool readProjectCoordinates(ProjectCoordinates& result, std::string& error) const;
+    // Only explicit stored business-object relations; no name/folder inference.
+    bool listSourceWells(long long sourceId, std::vector<long long>& result, std::string& error) const;
+    // One SQLite read snapshot. Read-only sessions supported; output remains empty
+    // on failure/cancellation. All sources belonging to this stable well ID are read.
+    bool readWellPlotData(long long wellId, const WellPlotOptions& options,
+                          WellPlotData& result, std::string& error,
+                          const CancelCheck& cancelled={}) const;
     bool importDirectory(const std::string& directory, const ImportOptions& options, ImportReport& result, std::string& error, const ProgressCallback& progress={}, const CancelCheck& cancelled={});
     bool importFile(const std::string& path, const ImportOptions& options, ImportReport& result, std::string& error, const CancelCheck& cancelled={});
     // Persist a host-prepared, normalized model without reparsing or copying.
